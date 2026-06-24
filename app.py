@@ -15,8 +15,9 @@ import threading
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Body
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+import queue as _queue
 
 # --- Configuration (override with env vars) --------------------------------
 MUSIC_DIR = Path(os.environ.get("MUSIC_DIR", "./music")).expanduser().resolve()
@@ -140,6 +141,11 @@ def read_metadata(path: str):
 SCAN = {"running": False, "scanned": 0, "total": 0, "added": 0,
         "updated": 0, "removed": 0, "error": None, "finished_at": None}
 SCAN_LOCK = threading.Lock()
+
+# --- Cross-device sync ---
+_SYNC_CLIENTS: list[_queue.Queue] = []
+_SYNC_LOCK = threading.Lock()
+_SYNC_STATE: dict = {}
 
 def _scan_worker():
     global SCAN
@@ -372,6 +378,41 @@ def remove_from_playlist(pid: int, tid: int):
     with db() as c:
         c.execute("DELETE FROM playlist_tracks WHERE playlist_id=? AND track_id=?", (pid, tid))
     return {"ok": True}
+
+@app.post("/api/sync")
+def sync_push(body: dict = Body(...)):
+    global _SYNC_STATE
+    _SYNC_STATE = dict(body)
+    with _SYNC_LOCK:
+        dead = []
+        for cq in _SYNC_CLIENTS:
+            try: cq.put_nowait(_SYNC_STATE)
+            except _queue.Full: dead.append(cq)
+        for cq in dead: _SYNC_CLIENTS.remove(cq)
+    return {"ok": True}
+
+@app.get("/api/sync/events")
+def sync_events():
+    cq: _queue.Queue = _queue.Queue(maxsize=50)
+    if _SYNC_STATE:
+        cq.put_nowait(_SYNC_STATE)
+    with _SYNC_LOCK:
+        _SYNC_CLIENTS.append(cq)
+    def gen():
+        try:
+            yield "data: connected\n\n"
+            while True:
+                try:
+                    msg = cq.get(timeout=25)
+                    yield f"data: {json.dumps(msg)}\n\n"
+                except _queue.Empty:
+                    yield ": ka\n\n"
+        finally:
+            with _SYNC_LOCK:
+                if cq in _SYNC_CLIENTS:
+                    _SYNC_CLIENTS.remove(cq)
+    return StreamingResponse(gen(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 # Serve the single-page frontend (declared last so /api/* wins).
 app.mount("/", StaticFiles(directory=str(STATIC_DIR), html=True), name="static")

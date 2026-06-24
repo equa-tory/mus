@@ -107,7 +107,7 @@
   #bar{
     height:var(--bar-h);margin:0 8px;margin-bottom:calc(var(--safe) + 8px);
     background:var(--bg2);border:1px solid var(--line);border-radius:14px;
-    display:grid;grid-template-columns:46px 1fr auto;align-items:center;gap:12px;padding:0 8px 0 9px;
+    display:grid;grid-template-columns:46px 1fr auto auto auto;align-items:center;gap:8px;padding:0 8px 0 9px;
     box-shadow:0 10px 30px rgba(0,0,0,.45);cursor:pointer;
   }
   #bar .progress{position:absolute;left:14px;right:14px;bottom:6px;height:2px;background:var(--line);border-radius:2px;overflow:hidden}
@@ -249,6 +249,18 @@
     #sheetArtWrap{padding:10px 0}
     #sheet .inner{padding:calc(env(safe-area-inset-top,0px) + 4px) 18px calc(var(--safe) + 18px)}
   }
+
+  /* ---- mini-bar extras ---- */
+  #barLike{font-size:16px;color:var(--muted2);width:32px;height:40px;display:grid;place-items:center;border-radius:8px;flex:none}
+  #barLike:hover{color:var(--text);background:var(--bg3)}
+  #barLike.on{color:var(--accent)}
+  .bar-vol{width:76px;cursor:pointer;-webkit-appearance:none;appearance:none;height:22px;background:transparent}
+  .bar-vol::-webkit-slider-runnable-track{height:3px;border-radius:2px;background:linear-gradient(var(--accent),var(--accent)) no-repeat,var(--line);background-size:var(--fill,0%) 100%}
+  .bar-vol::-moz-range-track{height:3px;border-radius:2px;background:var(--line)}
+  .bar-vol::-moz-range-progress{height:3px;border-radius:2px;background:var(--accent)}
+  .bar-vol::-webkit-slider-thumb{-webkit-appearance:none;width:12px;height:12px;border-radius:50%;background:var(--text);margin-top:-4.5px;box-shadow:0 1px 3px rgba(0,0,0,.4)}
+  .bar-vol::-moz-range-thumb{width:12px;height:12px;border:0;border-radius:50%;background:var(--text)}
+  @media(max-width:640px){.bar-vol{display:none}}
 </style>
 </head>
 <body>
@@ -264,6 +276,8 @@
     <div id="bar">
       <img id="barArt" alt="">
       <div id="barMeta"><div id="barTitle"></div><div id="barArtist"></div></div>
+      <button id="barLike" title="Like">♡</button>
+      <input id="barVol" class="bar-vol" type="range" min="0" max="100" value="90">
       <div class="ctrl">
         <button id="barPrev" title="Previous">⏮</button>
         <button id="barPlay" title="Play">▶</button>
@@ -589,7 +603,8 @@ function onTrackChanged(id){
   setArt($("#barArt"),artUrl); setArt($("#sheetArt"),artUrl); setArt($("#sheetBg"),artUrl);
   const liked=!!t.liked;
   $("#npLike").textContent=liked?"♥":"♡"; $("#npLike").classList.toggle("on",liked);
-  drawTimes(); updatePlay(); markPlayingRow(id); renderQueue(); persist();
+  $("#barLike").textContent=liked?"♥":"♡"; $("#barLike").classList.toggle("on",liked);
+  drawTimes(); updatePlay(); markPlayingRow(id); renderQueue(); persist(); syncState();
   // media session for lock-screen / TV controls
   if("mediaSession" in navigator){
     navigator.mediaSession.metadata=new MediaMetadata({title:t.title,artist:t.artist,album:t.album,
@@ -603,7 +618,7 @@ function togglePlay(){
   if(!currentId()) return;
   if(S.playing){ S.playing=false; fade(cur(),0,FADE,()=>cur().pause()); }
   else { S.playing=true; const p=cur().play(); if(p&&p.catch)p.catch(()=>{}); fade(cur(),S.volume,FADE); }
-  updatePlay(); markPlayingRow(currentId()); persist();
+  updatePlay(); markPlayingRow(currentId()); persist(); syncState();
 }
 function nextTrack(){ const id=peekNext(); if(id!=null) transitionTo(id,FADE); }
 function prevTrack(){
@@ -655,6 +670,8 @@ function drawTimes(){
 function updatePlay(){
   const i=S.playing?"⏸":"▶";
   $("#barPlay").textContent=i; $("#npPlay").textContent=i;
+  if("mediaSession" in navigator)
+    navigator.mediaSession.playbackState=S.playing?"playing":"paused";
 }
 function markPlayingRow(id){
   listEl.querySelectorAll(".row.playing").forEach(r=>{
@@ -676,20 +693,24 @@ async function toggleLike(id){
   tr(id).liked=liked;
   const row=listEl.querySelector('.row[data-id="'+id+'"] .like');
   if(row){ row.classList.toggle("on",liked); row.textContent=liked?"♥":"♡"; }
-  if(id===currentId()){ $("#npLike").classList.toggle("on",liked); $("#npLike").textContent=liked?"♥":"♡"; }
+  if(id===currentId()){
+    $("#npLike").classList.toggle("on",liked); $("#npLike").textContent=liked?"♥":"♡";
+    $("#barLike").classList.toggle("on",liked); $("#barLike").textContent=liked?"♥":"♡";
+  }
   if(S.view==="liked") render();
 }
 
 // ---- expand / collapse sheet ----
 function expand(){ $("#sheet").classList.add("open"); }
 function collapse(){ $("#sheet").classList.remove("open"); closePanels(); }
-$("#bar").addEventListener("click",e=>{ if(!e.target.closest(".ctrl")) expand(); });
+$("#bar").addEventListener("click",e=>{ if(!e.target.closest(".ctrl")&&e.target.id!=="barLike"&&e.target.id!=="barVol") expand(); });
 $("#collapse").onclick=collapse;
 $("#barPlay").onclick=e=>{e.stopPropagation();togglePlay();};
 $("#barNext").onclick=e=>{e.stopPropagation();nextTrack();};
 $("#barPrev").onclick=e=>{e.stopPropagation();prevTrack();};
 $("#npPlay").onclick=togglePlay; $("#next").onclick=nextTrack; $("#prev").onclick=prevTrack;
 $("#npLike").onclick=()=>{ const id=currentId(); if(id!=null) toggleLike(id); };
+$("#barLike").onclick=e=>{ e.stopPropagation(); const id=currentId(); if(id!=null) toggleLike(id); };
 
 // ---- brand → library ----
 $(".brand").onclick=()=>{ S.view="library"; S.openPlaylist=null; S.search=""; $("#search").value=""; render(); listEl.scrollTop=0; };
@@ -732,10 +753,10 @@ $(".brand").onclick=()=>{ S.view="library"; S.openPlaylist=null; S.search=""; $(
 });
 
 $("#shuffle").onclick=()=>{ S.shuffle=!S.shuffle; $("#shuffle").classList.toggle("on",S.shuffle);
-  const id=currentId(); if(id!=null){ buildOrder(S.queue.indexOf(id)); } renderQueue(); persist(); };
+  const id=currentId(); if(id!=null){ buildOrder(S.queue.indexOf(id)); } renderQueue(); persist(); syncState(); };
 $("#repeat").onclick=()=>{ S.repeat=S.repeat==="off"?"all":S.repeat==="all"?"one":"off";
   const b=$("#repeat"); b.classList.toggle("on",S.repeat!=="off"); b.textContent=S.repeat==="one"?"↻¹":"↻";
-  b.title="Repeat: "+S.repeat; persist(); };
+  b.title="Repeat: "+S.repeat; persist(); syncState(); };
 
 // ---- seek + volume + crossfade ----
 const seek=$("#seek");
@@ -745,6 +766,7 @@ seek.addEventListener("change",()=>{ const a=cur(),dur=a.duration||tr(currentId(
   if(dur) a.currentTime=dur*seek.value/1000; S._seeking=false; persist(); });
 const vol=$("#vol");
 vol.addEventListener("input",()=>{ S.volume=vol.value/100; vol.style.setProperty("--fill",vol.value+"%");
+  const bv=$("#barVol"); bv.value=vol.value; bv.style.setProperty("--fill",vol.value+"%");
   const a=cur(); a._ft=(a._ft||0)+1; a.volume=S.volume; persist(); });
 const xfadeEl=$("#xfade"), xfadeLbl=$("#xfadeLabel");
 function syncXfadeLabel(){ xfadeLbl.textContent="Crossfade · "+(S.crossfade===0?"off":S.crossfade+"s"); }
@@ -752,6 +774,12 @@ xfadeEl.addEventListener("input",()=>{
   S.crossfade=+xfadeEl.value;
   xfadeEl.style.setProperty("--fill",(S.crossfade/30*100)+"%");
   syncXfadeLabel(); persist();
+});
+const barVol=$("#barVol");
+barVol.addEventListener("input",()=>{
+  S.volume=barVol.value/100; barVol.style.setProperty("--fill",barVol.value+"%");
+  vol.value=barVol.value; vol.style.setProperty("--fill",barVol.value+"%");
+  const a=cur(); a._ft=(a._ft||0)+1; a.volume=S.volume; persist();
 });
 
 // ---- queue panel ----
@@ -770,7 +798,7 @@ function renderQueue(){
     m.querySelector(".qt").textContent=t.title; m.querySelector(".qs").textContent=t.artist;
     const x=el("button","qx"); x.textContent=i===S.pos?"♪":"✕";
     if(i!==S.pos) x.onclick=()=>{ const realIdx=S.order[i]; S.order.splice(i,1);
-      S.queue.splice(realIdx,1); S.order=S.order.map(v=>v>realIdx?v-1:v); renderQueue(); };
+      S.queue.splice(realIdx,1); S.order=S.order.map(v=>v>realIdx?v-1:v); renderQueue(); syncState(); };
     it.append(m,x);
     it.onclick=e=>{ if(e.target===x) return; S.pos=i; transitionTo(currentId(),FADE); };
     body.appendChild(it);
@@ -839,11 +867,11 @@ function playNext(id){
   S.queue.splice(insertReal,0,id);
   S.order=S.order.map(v=>v>=insertReal?v+1:v);
   S.order.splice(S.pos+1,0,insertReal);
-  renderQueue(); toast("Playing next");
+  renderQueue(); toast("Playing next"); syncState();
 }
 function addQueue(id){
   if(!S.queue.length){ S.queue=[id]; buildOrder(0); showPlayer(); transitionTo(id,FADE); return; }
-  S.queue.push(id); S.order.push(S.queue.length-1); renderQueue(); toast("Added to queue");
+  S.queue.push(id); S.order.push(S.queue.length-1); renderQueue(); toast("Added to queue"); syncState();
 }
 async function addToPlaylist(pid,tid){
   await fetch("api/playlists/"+pid+"/tracks",{method:"POST",headers:{"Content-Type":"application/json"},
@@ -986,6 +1014,7 @@ function restore(){
   if(!d) return;
   S.volume=d.volume??0.9; S.crossfade=d.crossfade??4; S.shuffle=!!d.shuffle; S.repeat=d.repeat||"off";
   vol.value=Math.round(S.volume*100); vol.style.setProperty("--fill",(S.volume*100)+"%");
+  barVol.value=vol.value; barVol.style.setProperty("--fill",(S.volume*100)+"%");
   xfadeEl.value=S.crossfade; xfadeEl.style.setProperty("--fill",(S.crossfade/30*100)+"%"); syncXfadeLabel();
   $("#shuffle").classList.toggle("on",S.shuffle);
   if(S.repeat!=="off"){ $("#repeat").classList.add("on"); $("#repeat").textContent=S.repeat==="one"?"↻¹":"↻"; }
@@ -1007,6 +1036,60 @@ function toast(msg){ const t=$("#toast"); t.textContent=msg; t.classList.add("sh
   clearTimeout(toastT); toastT=setTimeout(()=>t.classList.remove("show"),2200); }
 
 addEventListener("scroll",closeMenu,true);
+
+// ---- cross-device sync ----
+const CLIENT_ID=Math.random().toString(36).slice(2,10);
+let _applyingSync=false, _syncT=null;
+function syncState(){
+  if(_applyingSync) return;
+  clearTimeout(_syncT);
+  _syncT=setTimeout(()=>{
+    const id=currentId(); if(id==null) return;
+    fetch("api/sync",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({clientId:CLIENT_ID,id,playing:S.playing,
+        queue:S.queue,order:S.order,pos:S.pos,shuffle:S.shuffle,repeat:S.repeat})
+    }).catch(()=>{});
+  },300);
+}
+function applySync(d){
+  if(!d||d.clientId===CLIENT_ID) return;
+  _applyingSync=true;
+  try{
+    const prevId=currentId();
+    if(Array.isArray(d.queue)) S.queue=d.queue;
+    if(Array.isArray(d.order)) S.order=d.order;
+    if(typeof d.pos==="number") S.pos=d.pos;
+    if(typeof d.shuffle==="boolean"&&d.shuffle!==S.shuffle){
+      S.shuffle=d.shuffle; $("#shuffle").classList.toggle("on",S.shuffle);
+    }
+    if(d.repeat&&d.repeat!==S.repeat){
+      S.repeat=d.repeat; const rb=$("#repeat");
+      rb.classList.toggle("on",S.repeat!=="off");
+      rb.textContent=S.repeat==="one"?"↻¹":"↻"; rb.title="Repeat: "+S.repeat;
+    }
+    if(d.id!=null&&S.byId.has(d.id)){
+      if(d.id!==prevId){
+        S.playing=false; cur().pause();
+        cur().src="api/stream/"+d.id; cur().volume=S.volume;
+        showPlayer(); onTrackChanged(d.id);
+        if(d.playing){ S.playing=true; const p=cur().play(); if(p&&p.catch)p.catch(()=>{}); }
+        updatePlay(); markPlayingRow(d.id);
+      } else if(d.playing!==S.playing){
+        if(d.playing){ S.playing=true; cur().volume=S.volume; cur().play().catch(()=>{}); }
+        else { S.playing=false; cur().pause(); }
+        updatePlay(); markPlayingRow(d.id);
+      }
+    }
+    renderQueue();
+  }finally{ _applyingSync=false; }
+}
+function connectSync(){
+  const es=new EventSource("api/sync/events");
+  es.onmessage=e=>{ if(e.data==="connected"||e.data.startsWith(":")) return;
+    try{ applySync(JSON.parse(e.data)); }catch(ex){} };
+  es.onerror=()=>{ es.close(); setTimeout(connectSync,4000); };
+}
+connectSync();
 
 // ---- boot ----
 (async()=>{ await loadTracks(); await loadPlaylists(); restore(); })();
