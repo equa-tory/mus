@@ -6,6 +6,8 @@
 <meta name="theme-color" content="#15120e">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="manifest" href="/manifest.json">
+<link rel="apple-touch-icon" href="/icon-180.png">
 <title>Library</title>
 <style>
   /* ---- tokens: warm near-black room, single amber accent ---- */
@@ -107,7 +109,7 @@
   #bar{
     height:var(--bar-h);margin:0 8px;margin-bottom:calc(var(--safe) + 8px);
     background:var(--bg2);border:1px solid var(--line);border-radius:14px;
-    display:grid;grid-template-columns:46px 1fr auto auto auto;align-items:center;gap:8px;padding:0 8px 0 9px;
+    display:grid;grid-template-columns:46px 1fr auto auto auto auto auto;align-items:center;gap:6px;padding:0 8px 0 9px;
     box-shadow:0 10px 30px rgba(0,0,0,.45);cursor:pointer;
   }
   #bar .progress{position:absolute;left:14px;right:14px;bottom:6px;height:2px;background:var(--line);border-radius:2px;overflow:hidden}
@@ -261,6 +263,11 @@
   .bar-vol::-webkit-slider-thumb{-webkit-appearance:none;width:12px;height:12px;border-radius:50%;background:var(--text);margin-top:-4.5px;box-shadow:0 1px 3px rgba(0,0,0,.4)}
   .bar-vol::-moz-range-thumb{width:12px;height:12px;border:0;border-radius:50%;background:var(--text)}
   @media(max-width:640px){.bar-vol{display:none}}
+  #barQueue,#barMore{font-size:17px;color:var(--muted2);width:32px;height:40px;display:grid;place-items:center;border-radius:8px;flex:none}
+  #barQueue:hover,#barMore:hover{color:var(--text);background:var(--bg3)}
+  @media(max-width:640px){#barQueue{display:none}}
+  #roleBtn{width:100%;margin-top:8px;text-align:center;font-size:13px}
+  #roleBtn.ctrl{border-color:var(--accent-dim);color:var(--accent)}
 </style>
 </head>
 <body>
@@ -278,6 +285,8 @@
       <div id="barMeta"><div id="barTitle"></div><div id="barArtist"></div></div>
       <button id="barLike" title="Like">♡</button>
       <input id="barVol" class="bar-vol" type="range" min="0" max="100" value="90">
+      <button id="barQueue" title="Queue">☰</button>
+      <button id="barMore" title="More">⋯</button>
       <div class="ctrl">
         <button id="barPrev" title="Previous">⏮</button>
         <button id="barPlay" title="Play">▶</button>
@@ -324,6 +333,7 @@
           <button class="btn" id="openQueue">Queue</button>
           <button class="btn" id="openSleep">Sleep timer</button>
         </div>
+        <button class="btn" id="roleBtn">🔊 Output</button>
 
         <div class="panel" id="queuePanel">
           <div class="phead"><b>Queue</b><button id="closeQueue">Done</button></div>
@@ -352,7 +362,7 @@ const S = {
   search:"", listIds:[], historyIds:[],
   queue:[], order:[], pos:0, shuffle:false, repeat:"off",
   volume:0.9, crossfade:4, playing:false,
-  sleep:null, _xfading:false, _counted:false, _seeking:false,
+  sleep:null, _xfading:false, _counted:false, _seeking:false, role:"output",
   playlists:[],
 };
 const TABS = [["library","Library"],["recent","Recently added"],["liked","Liked"],
@@ -582,18 +592,19 @@ function shufflePlay(ids){
 let _tEpoch=0;
 function transitionTo(id, dur){
   if(id==null) return;
-  const inn=oth();
-  inn.src="api/stream/"+id; inn.currentTime=0; inn.volume=0;
-  const p=inn.play(); if(p&&p.catch) p.catch(()=>{});
-  crossfade(cur(), inn, dur);
-  ai^=1;
+  if(S.role==="output"){
+    const inn=oth();
+    inn.src="api/stream/"+id; inn.currentTime=0; inn.volume=0;
+    const p=inn.play(); if(p&&p.catch) p.catch(()=>{});
+    crossfade(cur(), inn, dur);
+    ai^=1;
+    const ep=++_tEpoch;
+    setTimeout(()=>{ if(_tEpoch!==ep||!S.playing) return;
+      const a=cur(); if(a.volume<S.volume*0.8){a._ft=(a._ft||0)+1;a.volume=S.volume;} },
+      Math.max(dur,0.1)*1000+500);
+  }
   S.playing=true; S._counted=false; S._xfading=false;
   onTrackChanged(id);
-  // Safety: if the rAF volume-fade was interrupted (tab hidden, etc.) self-correct
-  const ep=++_tEpoch;
-  setTimeout(()=>{ if(_tEpoch!==ep||!S.playing) return;
-    const a=cur(); if(a.volume<S.volume*0.8){a._ft=(a._ft||0)+1;a.volume=S.volume;} },
-    Math.max(dur,0.1)*1000+500);
 }
 function onTrackChanged(id){
   const t=tr(id); if(!t) return;
@@ -616,8 +627,12 @@ function setArt(img,url){ if(url){ img.style.visibility="visible"; img.src=url; 
 
 function togglePlay(){
   if(!currentId()) return;
-  if(S.playing){ S.playing=false; fade(cur(),0,FADE,()=>cur().pause()); }
-  else { S.playing=true; const p=cur().play(); if(p&&p.catch)p.catch(()=>{}); fade(cur(),S.volume,FADE); }
+  if(S.role==="output"){
+    if(S.playing){ S.playing=false; fade(cur(),0,FADE,()=>cur().pause()); }
+    else { S.playing=true; const p=cur().play(); if(p&&p.catch)p.catch(()=>{}); fade(cur(),S.volume,FADE); }
+  } else {
+    S.playing=!S.playing; // controller: flip state and let output respond to sync
+  }
   updatePlay(); markPlayingRow(currentId()); persist(); syncState();
 }
 function nextTrack(){ const id=peekNext(); if(id!=null) transitionTo(id,FADE); }
@@ -634,6 +649,7 @@ function onTime(e){
   const a=cur(); drawTimes();
   // count a play once it's actually been "heard"
   if(!S._counted && a.duration && a.currentTime>=Math.min(10,a.duration*0.5)) countPlay();
+  if(S.role!=="output") return;
   // auto crossfade into next near the end
   if(S.crossfade>0 && !S._xfading && a.duration && a.currentTime>2){
     const remain=a.duration-a.currentTime;
@@ -646,6 +662,7 @@ function onTime(e){
 }
 function onEnded(e){
   if(e.target!==cur()) return;
+  if(S.role!=="output") return;
   if(!S._counted) countPlay();
   if(S.sleep && S.sleep.endOfTrack){ stopPlay(); clearSleep(); return; }
   const id=peekNext();
@@ -703,7 +720,7 @@ async function toggleLike(id){
 // ---- expand / collapse sheet ----
 function expand(){ $("#sheet").classList.add("open"); }
 function collapse(){ $("#sheet").classList.remove("open"); closePanels(); }
-$("#bar").addEventListener("click",e=>{ if(!e.target.closest(".ctrl")&&e.target.id!=="barLike"&&e.target.id!=="barVol") expand(); });
+$("#bar").addEventListener("click",e=>{ if(!e.target.closest(".ctrl")&&!["barLike","barVol","barQueue","barMore"].includes(e.target.id)) expand(); });
 $("#collapse").onclick=collapse;
 $("#barPlay").onclick=e=>{e.stopPropagation();togglePlay();};
 $("#barNext").onclick=e=>{e.stopPropagation();nextTrack();};
@@ -711,6 +728,9 @@ $("#barPrev").onclick=e=>{e.stopPropagation();prevTrack();};
 $("#npPlay").onclick=togglePlay; $("#next").onclick=nextTrack; $("#prev").onclick=prevTrack;
 $("#npLike").onclick=()=>{ const id=currentId(); if(id!=null) toggleLike(id); };
 $("#barLike").onclick=e=>{ e.stopPropagation(); const id=currentId(); if(id!=null) toggleLike(id); };
+$("#barQueue").onclick=e=>{ e.stopPropagation(); expand(); renderQueue(); openPanel($("#queuePanel")); };
+$("#barMore").onclick=e=>{ e.stopPropagation(); const id=currentId(); if(id!=null) openMenu(e.currentTarget,id); };
+$("#roleBtn").onclick=()=>setRole(S.role==="output"?"controller":"output");
 
 // ---- brand → library ----
 $(".brand").onclick=()=>{ S.view="library"; S.openPlaylist=null; S.search=""; $("#search").value=""; render(); listEl.scrollTop=0; };
@@ -1012,6 +1032,7 @@ function persist(){ clearTimeout(pT); pT=setTimeout(()=>{
 function restore(){
   let d; try{ d=JSON.parse(localStorage.getItem("player")||"null"); }catch(e){}
   if(!d) return;
+  _applyingSync=true; // suppress outgoing sync during restore
   S.volume=d.volume??0.9; S.crossfade=d.crossfade??4; S.shuffle=!!d.shuffle; S.repeat=d.repeat||"off";
   vol.value=Math.round(S.volume*100); vol.style.setProperty("--fill",(S.volume*100)+"%");
   barVol.value=vol.value; barVol.style.setProperty("--fill",(S.volume*100)+"%");
@@ -1019,6 +1040,8 @@ function restore(){
   $("#shuffle").classList.toggle("on",S.shuffle);
   if(S.repeat!=="off"){ $("#repeat").classList.add("on"); $("#repeat").textContent=S.repeat==="one"?"↻¹":"↻"; }
   aud.forEach(a=>a.volume=S.volume);
+  // sync roleBtn label (S.role already set from localStorage above init)
+  const rb=$("#roleBtn"); if(rb){ rb.textContent=S.role==="output"?"🔊 Output":"🎮 Control only"; rb.classList.toggle("ctrl",S.role!=="output"); }
   if(d.id!=null && S.byId.has(d.id) && Array.isArray(d.queue) && d.queue.length){
     S.queue=d.queue; S.order=d.order&&d.order.length===d.queue.length?d.order:[...d.queue.keys()];
     S.pos=d.pos||0; showPlayer();
@@ -1028,6 +1051,7 @@ function restore(){
       cur().removeEventListener("loadedmetadata",once); drawTimes(); },{once:true});
     S.playing=false; onTrackChanged(d.id); updatePlay();
   }
+  _applyingSync=false;
 }
 
 // ---- toast ----
@@ -1039,7 +1063,9 @@ addEventListener("scroll",closeMenu,true);
 
 // ---- cross-device sync ----
 const CLIENT_ID=Math.random().toString(36).slice(2,10);
-let _applyingSync=false, _syncT=null;
+let _applyingSync=false, _syncT=null, _lastSyncState=null;
+let _autoRoleDone=!!localStorage.getItem("role");
+S.role=localStorage.getItem("role")||"output";
 function syncState(){
   if(_applyingSync) return;
   clearTimeout(_syncT);
@@ -1047,12 +1073,14 @@ function syncState(){
     const id=currentId(); if(id==null) return;
     fetch("api/sync",{method:"POST",headers:{"Content-Type":"application/json"},
       body:JSON.stringify({clientId:CLIENT_ID,id,playing:S.playing,
-        queue:S.queue,order:S.order,pos:S.pos,shuffle:S.shuffle,repeat:S.repeat})
+        queue:S.queue,order:S.order,pos:S.pos,shuffle:S.shuffle,repeat:S.repeat,
+        time:S.role==="output"?cur().currentTime:undefined})
     }).catch(()=>{});
   },300);
 }
 function applySync(d){
   if(!d||d.clientId===CLIENT_ID) return;
+  _lastSyncState=d;
   _applyingSync=true;
   try{
     const prevId=currentId();
@@ -1069,24 +1097,64 @@ function applySync(d){
     }
     if(d.id!=null&&S.byId.has(d.id)){
       if(d.id!==prevId){
-        S.playing=false; cur().pause();
-        cur().src="api/stream/"+d.id; cur().volume=S.volume;
-        showPlayer(); onTrackChanged(d.id);
-        if(d.playing){ S.playing=true; const p=cur().play(); if(p&&p.catch)p.catch(()=>{}); }
-        updatePlay(); markPlayingRow(d.id);
+        if(S.role==="output"){
+          S.playing=false; cur().pause();
+          cur().src="api/stream/"+d.id; cur().volume=S.volume;
+          if(d.playing){ S.playing=true; const p=cur().play(); if(p&&p.catch)p.catch(()=>{}); }
+        } else {
+          S.playing=!!d.playing;
+        }
+        showPlayer(); onTrackChanged(d.id); updatePlay(); markPlayingRow(d.id);
       } else if(d.playing!==S.playing){
-        if(d.playing){ S.playing=true; cur().volume=S.volume; cur().play().catch(()=>{}); }
-        else { S.playing=false; cur().pause(); }
+        if(S.role==="output"){
+          if(d.playing){ S.playing=true; cur().volume=S.volume; cur().play().catch(()=>{}); }
+          else { S.playing=false; cur().pause(); }
+        } else {
+          S.playing=d.playing;
+        }
         updatePlay(); markPlayingRow(d.id);
       }
     }
     renderQueue();
   }finally{ _applyingSync=false; }
 }
+function setRole(role){
+  S.role=role; _autoRoleDone=true;
+  const isOut=role==="output";
+  const rb=$("#roleBtn");
+  rb.textContent=isOut?"🔊 Output":"🎮 Control only";
+  rb.classList.toggle("ctrl",!isOut);
+  if(!isOut){
+    aud.forEach(a=>{ a._ft=(a._ft||0)+1; a.pause(); });
+  } else {
+    aud.forEach(a=>a.volume=S.volume);
+    if(_lastSyncState&&_lastSyncState.id!=null&&S.byId.has(_lastSyncState.id)){
+      const ls=_lastSyncState;
+      cur().src="api/stream/"+ls.id; cur().volume=S.volume;
+      if(typeof ls.time==="number"&&ls.time>2)
+        cur().addEventListener("loadedmetadata",function once(){
+          cur().currentTime=ls.time; cur().removeEventListener("loadedmetadata",once); },{once:true});
+      if(ls.playing) cur().play().catch(()=>{});
+    } else if(S.playing&&currentId()){
+      cur().volume=S.volume; cur().play().catch(()=>{});
+    }
+  }
+  try{ localStorage.setItem("role",role); }catch(e){}
+}
 function connectSync(){
   const es=new EventSource("api/sync/events");
-  es.onmessage=e=>{ if(e.data==="connected"||e.data.startsWith(":")) return;
-    try{ applySync(JSON.parse(e.data)); }catch(ex){} };
+  es.onmessage=e=>{
+    if(e.data==="connected"||e.data.startsWith(":")) return;
+    try{
+      const d=JSON.parse(e.data);
+      // Auto-switch to controller if another device is actively playing and user never set a role
+      if(!_autoRoleDone&&d.clientId!==CLIENT_ID&&d.playing){
+        _autoRoleDone=true; setRole("controller");
+        toast("Another device is playing — set to Control mode. Tap role in Now Playing to take audio.");
+      }
+      applySync(d);
+    }catch(ex){}
+  };
   es.onerror=()=>{ es.close(); setTimeout(connectSync,4000); };
 }
 connectSync();
