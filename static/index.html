@@ -362,7 +362,7 @@ const S = {
   search:"", listIds:[], historyIds:[],
   queue:[], order:[], pos:0, shuffle:false, repeat:"off",
   volume:0.9, crossfade:4, playing:false,
-  sleep:null, _xfading:false, _counted:false, _seeking:false, role:"output",
+  sleep:null, _xfading:false, _counted:false, _seeking:false, role:"output", _ctrlTime:null,
   playlists:[],
 };
 const TABS = [["library","Library"],["recent","Recently added"],["liked","Liked"],
@@ -615,6 +615,7 @@ function onTrackChanged(id){
   const liked=!!t.liked;
   $("#npLike").textContent=liked?"♥":"♡"; $("#npLike").classList.toggle("on",liked);
   $("#barLike").textContent=liked?"♥":"♡"; $("#barLike").classList.toggle("on",liked);
+  if(S.role!=="output") S._ctrlTime=null;
   drawTimes(); updatePlay(); markPlayingRow(id); renderQueue(); persist(); syncState();
   // media session for lock-screen / TV controls
   if("mediaSession" in navigator){
@@ -679,9 +680,10 @@ function countPlay(){
 function drawTimes(){
   const a=cur(), id=currentId(); const t=id!=null?tr(id):null;
   const dur=isFinite(a.duration)&&a.duration?a.duration:(t?t.duration:0);
-  const frac=dur?a.currentTime/dur:0;
+  const ct=S.role!=="output"&&S._ctrlTime!=null?S._ctrlTime:a.currentTime;
+  const frac=dur?ct/dur:0;
   if(!S._seeking){ const sk=$("#seek"); sk.value=Math.round(frac*1000); sk.style.setProperty("--fill",(frac*100)+"%"); }
-  $("#tCur").textContent=fmt(a.currentTime); $("#tDur").textContent=fmt(dur);
+  $("#tCur").textContent=fmt(ct); $("#tDur").textContent=fmt(dur);
   $("#barFill").style.width=(frac*100)+"%";
 }
 function updatePlay(){
@@ -783,7 +785,7 @@ const seek=$("#seek");
 seek.addEventListener("input",()=>{ S._seeking=true; seek.style.setProperty("--fill",(seek.value/10)+"%");
   const a=cur(),dur=a.duration||tr(currentId())?.duration||0; $("#tCur").textContent=fmt(dur*seek.value/1000); });
 seek.addEventListener("change",()=>{ const a=cur(),dur=a.duration||tr(currentId())?.duration||0;
-  if(dur) a.currentTime=dur*seek.value/1000; S._seeking=false; persist(); });
+  if(dur) a.currentTime=dur*seek.value/1000; S._seeking=false; persist(); syncState(); });
 const vol=$("#vol");
 vol.addEventListener("input",()=>{ S.volume=vol.value/100; vol.style.setProperty("--fill",vol.value+"%");
   const bv=$("#barVol"); bv.value=vol.value; bv.style.setProperty("--fill",vol.value+"%");
@@ -1008,7 +1010,9 @@ if("mediaSession" in navigator){
   const ms=navigator.mediaSession;
   ms.setActionHandler("play",togglePlay); ms.setActionHandler("pause",togglePlay);
   ms.setActionHandler("previoustrack",prevTrack); ms.setActionHandler("nexttrack",nextTrack);
-  try{ ms.setActionHandler("seekto",d=>{ if(d.seekTime!=null) cur().currentTime=d.seekTime; }); }catch(e){}
+  try{ ms.setActionHandler("seekforward",()=>nextTrack()); }catch(e){}
+  try{ ms.setActionHandler("seekbackward",()=>prevTrack()); }catch(e){}
+  try{ ms.setActionHandler("seekto",d=>{ if(d.seekTime!=null&&S.role==="output") cur().currentTime=d.seekTime; }); }catch(e){}
 }
 
 // ---- keyboard (PC / some TV remotes) ----
@@ -1045,10 +1049,12 @@ function restore(){
   if(d.id!=null && S.byId.has(d.id) && Array.isArray(d.queue) && d.queue.length){
     S.queue=d.queue; S.order=d.order&&d.order.length===d.queue.length?d.order:[...d.queue.keys()];
     S.pos=d.pos||0; showPlayer();
-    // cue the last track paused at saved position; play resumes on user gesture
-    cur().src="api/stream/"+d.id; cur().volume=S.volume;
-    cur().addEventListener("loadedmetadata",function once(){ cur().currentTime=d.time||0;
-      cur().removeEventListener("loadedmetadata",once); drawTimes(); },{once:true});
+    if(S.role==="output"){
+      // cue the last track paused at saved position; play resumes on user gesture
+      cur().src="api/stream/"+d.id; cur().volume=S.volume;
+      cur().addEventListener("loadedmetadata",function once(){ cur().currentTime=d.time||0;
+        cur().removeEventListener("loadedmetadata",once); drawTimes(); },{once:true});
+    }
     S.playing=false; onTrackChanged(d.id); updatePlay();
   }
   _applyingSync=false;
@@ -1071,10 +1077,17 @@ function syncState(){
   clearTimeout(_syncT);
   _syncT=setTimeout(()=>{
     const id=currentId(); if(id==null) return;
+    const isOut=S.role==="output";
+    const payload={clientId:CLIENT_ID,playing:S.playing,shuffle:S.shuffle,repeat:S.repeat};
+    if(isOut){
+      payload.id=id; payload.queue=S.queue; payload.order=S.order; payload.pos=S.pos;
+      payload.time=cur().currentTime; payload.volume=S.volume; payload.crossfade=S.crossfade;
+    } else if(_lastSyncState){
+      // only send queue/id once we've received state from output; prevents stale restore overwriting output
+      payload.id=id; payload.queue=S.queue; payload.order=S.order; payload.pos=S.pos;
+    }
     fetch("api/sync",{method:"POST",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({clientId:CLIENT_ID,id,playing:S.playing,
-        queue:S.queue,order:S.order,pos:S.pos,shuffle:S.shuffle,repeat:S.repeat,
-        time:S.role==="output"?cur().currentTime:undefined})
+      body:JSON.stringify(payload)
     }).catch(()=>{});
   },300);
 }
@@ -1094,6 +1107,20 @@ function applySync(d){
       S.repeat=d.repeat; const rb=$("#repeat");
       rb.classList.toggle("on",S.repeat!=="off");
       rb.textContent=S.repeat==="one"?"↻¹":"↻"; rb.title="Repeat: "+S.repeat;
+    }
+    if(typeof d.volume==="number"&&d.volume!==S.volume){
+      S.volume=d.volume; const pct=Math.round(d.volume*100);
+      vol.value=pct; vol.style.setProperty("--fill",pct+"%");
+      barVol.value=pct; barVol.style.setProperty("--fill",pct+"%");
+      if(S.role==="output") aud.forEach(a=>a.volume=S.volume);
+    }
+    if(typeof d.crossfade==="number"&&d.crossfade!==S.crossfade){
+      S.crossfade=d.crossfade;
+      xfadeEl.value=d.crossfade; xfadeEl.style.setProperty("--fill",(d.crossfade/30*100)+"%");
+      syncXfadeLabel();
+    }
+    if(typeof d.time==="number"&&S.role!=="output"){
+      S._ctrlTime=d.time; drawTimes();
     }
     if(d.id!=null&&S.byId.has(d.id)){
       if(d.id!==prevId){
