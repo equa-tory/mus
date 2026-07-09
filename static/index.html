@@ -6,6 +6,8 @@
 <meta name="theme-color" content="#15120e">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png">
+<link rel="icon" type="image/png" sizes="512x512" href="/icon-512.png">
 <link rel="manifest" href="/manifest.json">
 <link rel="apple-touch-icon" href="/icon-180.png">
 <title>Library</title>
@@ -427,9 +429,38 @@ async function loadPlaylists(){
 }
 
 // ---- view list ----
-function matches(t){
-  const q=S.search.trim().toLowerCase(); if(!q) return true;
-  return (t.title+" "+t.artist+" "+t.album).toLowerCase().includes(q);
+const SEARCH_FIELDS=["title","artist","album"];
+function stripSep(s){ return (s||"").toLowerCase().replace(/[^a-z0-9]+/g,""); }
+function searchWords(q){ return q.trim().split(/\s+/).map(stripSep).filter(Boolean); }
+function levenshtein(a,b){
+  if(a===b) return 0;
+  if(!a.length) return b.length;
+  if(!b.length) return a.length;
+  let prev=new Array(b.length+1); for(let j=0;j<=b.length;j++) prev[j]=j;
+  for(let i=1;i<=a.length;i++){
+    const cur=[i];
+    for(let j=1;j<=b.length;j++){
+      cur[j]=a[i-1]===b[j-1] ? prev[j-1] :
+        1+Math.min(prev[j-1],prev[j],cur[j-1]);
+    }
+    prev=cur;
+  }
+  return prev[b.length];
+}
+function fuzzyMaxDist(len){ return len<=4?1:len<=8?2:3; }
+function exactMatchWords(t,words){
+  const norm=SEARCH_FIELDS.map(f=>stripSep(t[f]));
+  return words.every(w=>norm.some(f=>f.includes(w)));
+}
+function fuzzyMatchWords(t,words){
+  const tokens=SEARCH_FIELDS.flatMap(f=>(t[f]||"").toLowerCase().split(/[^a-z0-9]+/).filter(Boolean));
+  return words.every(w=>{
+    const maxD=fuzzyMaxDist(w.length);
+    return tokens.some(tok=>{
+      if(tok.includes(w)||w.includes(tok)) return true;
+      return levenshtein(w,tok)<=maxD;
+    });
+  });
 }
 function smartIds(rules){
   const cs=rules.conditions||[], m=rules.match||"all";
@@ -460,7 +491,11 @@ function viewIds(){
     }
     default: ids=[...S.allIds];
   }
-  return S.search.trim() ? ids.filter(id=>matches(tr(id))) : ids;
+  const q=S.search.trim(); if(!q) return ids;
+  const words=searchWords(q); if(!words.length) return ids;
+  const exact=ids.filter(id=>exactMatchWords(tr(id),words));
+  if(exact.length) return exact;
+  return ids.filter(id=>fuzzyMatchWords(tr(id),words));
 }
 
 // ---- rendering ----
