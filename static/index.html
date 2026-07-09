@@ -395,9 +395,39 @@ function unlock(){
   if(unlocked) return; unlocked=true;
   const tmp=new Audio(SILENT);
   const p=tmp.play(); if(p&&p.catch) p.catch(()=>{});
+  ensureKeepAlive();
 }
 addEventListener("pointerdown", unlock, {once:true});
 addEventListener("keydown", unlock, {once:true});
+
+// ---- bluetooth keep-alive: a continuous inaudible loop ----
+// Some BT headphones power down / drop the audio link a moment after real
+// audio stops (end of track, crossfade gap), then clip the start of the
+// next track while the link wakes back up. Keeping a silent (all-zero PCM,
+// unmuted) stream looping forever means the OS/BT audio pipeline is never
+// idle, so it never sleeps and never has to re-negotiate.
+function makeSilentLoop(seconds, sampleRate){
+  const numSamples=Math.floor(seconds*sampleRate), dataSize=numSamples*2;
+  const buf=new ArrayBuffer(44+dataSize), dv=new DataView(buf);
+  let p=0;
+  const u32=v=>{ dv.setUint32(p,v,true); p+=4; };
+  const u16=v=>{ dv.setUint16(p,v,true); p+=2; };
+  const str=s=>{ for(let i=0;i<s.length;i++){ dv.setUint8(p,s.charCodeAt(i)); p++; } };
+  str("RIFF"); u32(36+dataSize); str("WAVE");
+  str("fmt "); u32(16); u16(1); u16(1); u32(sampleRate); u32(sampleRate*2); u16(2); u16(16);
+  str("data"); u32(dataSize);
+  const bytes=new Uint8Array(buf);
+  let bin=""; for(let i=0;i<bytes.length;i++) bin+=String.fromCharCode(bytes[i]);
+  return "data:audio/wav;base64,"+btoa(bin);
+}
+const keepAlive=new Audio(makeSilentLoop(0.5,8000));
+keepAlive.loop=true; keepAlive.volume=1;
+function ensureKeepAlive(){
+  if(S.role==="output" && keepAlive.paused){
+    const p=keepAlive.play(); if(p&&p.catch) p.catch(()=>{});
+  }
+}
+function stopKeepAlive(){ keepAlive.pause(); }
 
 // ---- volume fades (per-element token cancels stale fades) ----
 function fade(a, to, dur, done){
@@ -628,6 +658,7 @@ let _tEpoch=0;
 function transitionTo(id, dur){
   if(id==null) return;
   if(S.role==="output"){
+    ensureKeepAlive();
     const inn=oth();
     inn.src="api/stream/"+id; inn.currentTime=0; inn.volume=0;
     const p=inn.play(); if(p&&p.catch) p.catch(()=>{});
@@ -665,7 +696,7 @@ function togglePlay(){
   if(!currentId()) return;
   if(S.role==="output"){
     if(S.playing){ S.playing=false; fade(cur(),0,FADE,()=>cur().pause()); }
-    else { S.playing=true; const p=cur().play(); if(p&&p.catch)p.catch(()=>{}); fade(cur(),S.volume,FADE); }
+    else { S.playing=true; ensureKeepAlive(); const p=cur().play(); if(p&&p.catch)p.catch(()=>{}); fade(cur(),S.volume,FADE); }
   } else {
     S.playing=!S.playing; // controller: flip state and let output respond to sync
   }
@@ -1162,14 +1193,14 @@ function applySync(d){
         if(S.role==="output"){
           S.playing=false; cur().pause();
           cur().src="api/stream/"+d.id; cur().volume=S.volume;
-          if(d.playing){ S.playing=true; const p=cur().play(); if(p&&p.catch)p.catch(()=>{}); }
+          if(d.playing){ S.playing=true; ensureKeepAlive(); const p=cur().play(); if(p&&p.catch)p.catch(()=>{}); }
         } else {
           S.playing=!!d.playing;
         }
         showPlayer(); onTrackChanged(d.id); updatePlay(); markPlayingRow(d.id);
       } else if(d.playing!==S.playing){
         if(S.role==="output"){
-          if(d.playing){ S.playing=true; cur().volume=S.volume; cur().play().catch(()=>{}); }
+          if(d.playing){ S.playing=true; ensureKeepAlive(); cur().volume=S.volume; cur().play().catch(()=>{}); }
           else { S.playing=false; cur().pause(); }
         } else {
           S.playing=d.playing;
@@ -1188,7 +1219,9 @@ function setRole(role){
   rb.classList.toggle("ctrl",!isOut);
   if(!isOut){
     aud.forEach(a=>{ a._ft=(a._ft||0)+1; a.pause(); });
+    stopKeepAlive();
   } else {
+    ensureKeepAlive();
     aud.forEach(a=>a.volume=S.volume);
     if(_lastSyncState&&_lastSyncState.id!=null&&S.byId.has(_lastSyncState.id)){
       const ls=_lastSyncState;
