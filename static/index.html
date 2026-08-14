@@ -469,19 +469,31 @@ function ensureKeepAlive(){
 function stopKeepAlive(){ keepAlive.pause(); }
 
 // ---- volume fades (per-element token cancels stale fades) ----
+// rAF alone is not enough: browsers suspend requestAnimationFrame in hidden
+// tabs, so a fade started right before a tab switch would otherwise freeze
+// forever mid-fade and never reach its `done` (e.g. never pause the element
+// it was fading out) — leaving a track quietly playing with no way to stop
+// it. A parallel wall-clock timeout guarantees `finish` still runs.
 function fade(a, to, dur, done){
   const tok = (a._ft=(a._ft||0)+1), from=a.volume, t0=performance.now();
-  if(dur<=0){ a.volume=to; done&&done(); return; }
+  clearTimeout(a._fto);
+  a._fadeTo=to;
+  if(dur<=0){ a.volume=to; a._fadeTo=undefined; done&&done(); return; }
+  let fired=false;
+  const finish=()=>{ if(fired||a._ft!==tok) return; fired=true;
+    clearTimeout(a._fto); a.volume=to; a._fadeTo=undefined; done&&done(); };
   (function step(now){
     if(a._ft!==tok) return;
     const k=Math.min(1,(now-t0)/(dur*1000));
     a.volume=from+(to-from)*k;
-    k<1 ? requestAnimationFrame(step) : (done&&done());
+    if(k<1) requestAnimationFrame(step); else finish();
   })(performance.now());
+  a._fto=setTimeout(finish, dur*1000+150);
 }
 function crossfade(out,inn,dur,done){
   fade(inn,S.volume,dur);
-  fade(out,0,dur,()=>{ try{out.pause();}catch(e){} out.currentTime=0; out.volume=S.volume; });
+  out._xfUntil=performance.now()+dur*1000+300;
+  fade(out,0,dur,()=>{ try{out.pause();}catch(e){} out.currentTime=0; out.volume=S.volume; out._xfUntil=undefined; });
   setTimeout(()=>done&&done(), Math.max(0,dur*1000)+40);
 }
 
@@ -705,7 +717,9 @@ function transitionTo(id, dur){
     crossfade(cur(), inn, dur);
     ai^=1;
     const ep=++_tEpoch;
-    setTimeout(()=>{ if(_tEpoch!==ep||!S.playing) return;
+    setTimeout(()=>{
+      enforceSingleAudio();
+      if(_tEpoch!==ep||!S.playing) return;
       const a=cur(); if(a.volume<S.volume*0.8){a._ft=(a._ft||0)+1;a.volume=S.volume;} },
       Math.max(dur,0.1)*1000+500);
   }
@@ -732,13 +746,24 @@ function onTrackChanged(id){
 function setArt(img,url){ if(url){ img.style.visibility="visible"; img.src=url; img.onerror=()=>img.style.visibility="hidden"; }
   else { img.removeAttribute("src"); img.style.visibility="hidden"; } }
 
-function togglePlay(){
+// Absolute play/pause: commands and clicks always state the *desired* end
+// state rather than "toggle", so a double-tap or a dropped/reordered remote
+// command converges on the right answer instead of cancelling out.
+function setPlaying(want){
   if(!currentId()) return;
-  if(S.role!=="output"){ sendCmd({name:"toggle"}); return; }
-  if(S.playing){ S.playing=false; fade(cur(),0,FADE,()=>cur().pause()); }
+  if(S.role!=="output"){
+    // optimistic local feedback so the button responds instantly instead of
+    // waiting for a round-trip state push, then tell the output what we want
+    if(S.playing!==want){ S.playing=want; updatePlay(); markPlayingRow(currentId()); }
+    sendCmd({name:"play",value:want});
+    return;
+  }
+  if(want===S.playing) return;
+  if(!want){ const a=cur(); S.playing=false; fade(a,0,FADE,()=>a.pause()); }
   else { S.playing=true; ensureKeepAlive(); const p=cur().play(); if(p&&p.catch)p.catch(()=>{}); fade(cur(),S.volume,FADE); }
   updatePlay(); markPlayingRow(currentId()); persist(); syncState();
 }
+function togglePlay(){ setPlaying(!S.playing); }
 function nextTrack(){
   if(S.role!=="output"){ sendCmd({name:"next"}); return; }
   const id=peekNext(); if(id!=null) transitionTo(id,FADE);
@@ -750,7 +775,7 @@ function prevTrack(){
   else if(S.repeat==="all"){ S.pos=S.order.length-1; transitionTo(currentId(),FADE); }
   else cur().currentTime=0;
 }
-function stopPlay(){ S.playing=false; fade(cur(),0,FADE,()=>cur().pause()); updatePlay(); markPlayingRow(null); persist(); syncState(); }
+function stopPlay(){ const a=cur(); S.playing=false; fade(a,0,FADE,()=>a.pause()); updatePlay(); markPlayingRow(null); persist(); syncState(); }
 
 function onTime(e){
   if(e.target!==cur()) return;
@@ -949,7 +974,13 @@ function setVolume(v){
   S.volume=v; const pct=Math.round(v*100);
   vol.value=pct; vol.style.setProperty("--fill",pct+"%");
   barVol.value=pct; barVol.style.setProperty("--fill",pct+"%");
-  if(S.role==="output"){ const a=cur(); a._ft=(a._ft||0)+1; a.volume=S.volume; }
+  // Don't cancel a fade-to-zero that's already in flight (a pause, or the
+  // outgoing half of a crossfade) — bumping _ft here would silently cancel
+  // a pending pause. Only snap the level when no fade is running, or the
+  // running fade is itself heading up (a fade-in), matching S.volume anyway.
+  if(S.role==="output"){ const a=cur();
+    if(a._fadeTo===undefined || a._fadeTo>0){ a._ft=(a._ft||0)+1; a.volume=S.volume; }
+  }
 }
 function onVolInput(pct){
   setVolume(pct/100); persist();
@@ -1037,7 +1068,7 @@ function setSleep(val){
   sleepTick=setInterval(()=>{
     const left=S.sleep.until-Date.now();
     const r=$("#sleepRemain"); if(r) r.textContent=fmt(left/1000);
-    if(left<=0){ fade(cur(),0,2,()=>cur().pause()); S.playing=false; updatePlay(); clearSleep(); syncState(); toast("Paused — sleep timer"); }
+    if(left<=0){ const a=cur(); fade(a,0,2,()=>a.pause()); S.playing=false; updatePlay(); clearSleep(); syncState(); toast("Paused — sleep timer"); }
   },1000);
   renderSleep(); syncState(); toast("Sleeping in "+val+" min");
 }
@@ -1277,8 +1308,13 @@ function currentStatePayload(){
 }
 function pushState(){
   if(S.role!=="output") return;
+  const state=currentStatePayload();
+  _lastState=state; // the server never echoes a state push back to its sender,
+  // so without this an output that had never received a synced state would
+  // have a stale/empty _lastState — this is what let re-claiming output after
+  // a release resume a long-past track instead of the one actually showing.
   fetch("api/sync/state",{method:"POST",headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({cid:CLIENT_ID,state:currentStatePayload()})}).catch(()=>{});
+    body:JSON.stringify({cid:CLIENT_ID,state})}).catch(()=>{});
 }
 // debounced publish, called after any local mutation on the output (mirrors
 // the old syncState() name/shape so existing call sites don't need to change)
@@ -1291,9 +1327,48 @@ function syncState(){
 // used before loading a synced track so a half-finished crossfade can't leave
 // the previous track audible under the new one.
 function hardStop(){
-  aud.forEach(a=>{ a._ft=(a._ft||0)+1; try{a.pause();}catch(e){} a.volume=S.volume; });
+  aud.forEach(a=>{ a._ft=(a._ft||0)+1; clearTimeout(a._fto); a._fadeTo=undefined; a._xfUntil=undefined; try{a.pause();}catch(e){} a.volume=S.volume; });
+}
+// Belt-and-braces sweep: pause/rewind/reset-volume any element that isn't
+// cur() and isn't a legitimately in-flight crossfade partner (marked via
+// _xfUntil by crossfade()). Catches ghost audio left behind when a fade's
+// rAF loop got suspended by a backgrounded tab before it could pause its
+// element — the wall-clock timeout in fade() usually beats this to it, but
+// this is the last line of defense.
+function enforceSingleAudio(){
+  const keep=cur();
+  aud.forEach(a=>{
+    if(a===keep) return;
+    if(a._xfUntil && a._xfUntil>performance.now()) return;
+    if(a.paused) return;
+    a._ft=(a._ft||0)+1; clearTimeout(a._fto); a._fadeTo=undefined;
+    try{a.pause();}catch(e){} a.currentTime=0; a.volume=S.volume;
+  });
+}
+// Loads `id` into cur() (after hardStop) and, once metadata is ready, seeks
+// to `time`. Binds the loadedmetadata listener to the captured element, not
+// a fresh cur() lookup, so a role/track change during the async load can't
+// make it seek the wrong <audio>.
+function loadAt(id, time, play){
+  hardStop();
+  const a=cur();
+  a.src="api/stream/"+id; a.volume=S.volume;
+  if(time>0.5) a.addEventListener("loadedmetadata",function once(){
+    a.currentTime=time; a.removeEventListener("loadedmetadata",once); drawTimes(); },{once:true});
+  S._counted=false; S._xfading=false;
+  S.playing=!!play; showPlayer(); onTrackChanged(id);
+  if(S.playing){ ensureKeepAlive(); const p=a.play(); if(p&&p.catch)p.catch(()=>{}); }
 }
 
+// The settings-only half of a state snapshot (volume/crossfade/shuffle/repeat/
+// sleep) — safe to adopt unconditionally, unlike the track/queue/pos fields.
+function applySettings(st){
+  if(typeof st.shuffle==="boolean"&&st.shuffle!==S.shuffle){ S.shuffle=st.shuffle; syncShuffleUI(); }
+  if(st.repeat&&st.repeat!==S.repeat){ S.repeat=st.repeat; syncRepeatUI(); }
+  if(typeof st.volume==="number"&&st.volume!==S.volume) setVolume(st.volume);
+  if(typeof st.crossfade==="number"&&st.crossfade!==S.crossfade) setCrossfade(st.crossfade);
+  displaySleep(st.sleep);
+}
 // Applies a full state snapshot published by the output. The published `id`
 // is the single source of truth: pos is repaired to agree with it rather than
 // trusting queue/order/pos in isolation, which is what keeps the displayed
@@ -1311,11 +1386,7 @@ function applyState(st){
       const realIdx=S.queue.indexOf(st.id);
       if(realIdx!==-1){ const slot=S.order.indexOf(realIdx); if(slot!==-1) S.pos=slot; }
     }
-    if(typeof st.shuffle==="boolean"&&st.shuffle!==S.shuffle){ S.shuffle=st.shuffle; syncShuffleUI(); }
-    if(st.repeat&&st.repeat!==S.repeat){ S.repeat=st.repeat; syncRepeatUI(); }
-    if(typeof st.volume==="number"&&st.volume!==S.volume) setVolume(st.volume);
-    if(typeof st.crossfade==="number"&&st.crossfade!==S.crossfade) setCrossfade(st.crossfade);
-    displaySleep(st.sleep);
+    applySettings(st);
     if(typeof st.time==="number"&&S.role!=="output"){ S._ctrlTime=st.time; S._ctrlTimeAt=performance.now(); drawTimes(); }
 
     const id=st.id;
@@ -1325,10 +1396,11 @@ function applyState(st){
         if(trackChanged){
           hardStop();
           transitionTo(id,0);
-          if(!st.playing){ S.playing=false; fade(cur(),0,0); cur().pause(); updatePlay(); markPlayingRow(id); }
+          if(!st.playing){ const a=cur(); S.playing=false; a.pause(); updatePlay(); markPlayingRow(id); }
+          enforceSingleAudio();
         } else if(typeof st.playing==="boolean"&&st.playing!==S.playing){
           if(st.playing){ S.playing=true; ensureKeepAlive(); cur().volume=S.volume; cur().play().catch(()=>{}); }
-          else { S.playing=false; cur().pause(); }
+          else { cur().pause(); S.playing=false; }
           updatePlay(); markPlayingRow(id);
         }
       } else {
@@ -1362,7 +1434,8 @@ function applyCmd(cmd){
   }
   if(S.role!=="output") return; // only the output executes playback/setting commands
   switch(cmd.name){
-    case "toggle": togglePlay(); break;
+    case "toggle": setPlaying(!S.playing); break;
+    case "play": setPlaying(!!cmd.value); break;
     case "next": nextTrack(); break;
     case "prev": prevTrack(); break;
     case "seek": seekTo(cmd.value); break;
@@ -1412,24 +1485,26 @@ function setRoleFromServer(output,peers){
   S.role = output===CLIENT_ID ? "output" : (output==null ? null : "controller");
   syncRoleUI();
   if(S.role==="output" && prevRole!=="output"){
-    ensureKeepAlive(); aud.forEach(a=>a.volume=S.volume);
-    const resume = (_lastState && _lastState.id!=null && S.byId.has(_lastState.id))
+    ensureKeepAlive(); hardStop();
+    // Prefer whatever this device's UI is already showing (it's what the
+    // user just looked at when they tapped "Play here") over a possibly
+    // stale _lastState — a device that had itself been output before never
+    // gets its own pushes echoed back, so _lastState alone could point at a
+    // long-past track while the screen still shows the real current one.
+    const shownId=currentId();
+    // S.role is already "output" by this point (set above); S._ctrlTime is
+    // this device's own mirrored clock from when it was still a controller.
+    const resume = (shownId!=null && S.byId.has(shownId))
+      ? {id:shownId, time:S._ctrlTime!=null?S._ctrlTime:cur().currentTime, playing:false}
+      : (_lastState && _lastState.id!=null && S.byId.has(_lastState.id))
       ? {id:_lastState.id, time:_lastState.time||0, playing:!!_lastState.playing}
       : (S._resume && S.byId.has(S._resume.id) ? {id:S._resume.id, time:S._resume.time, playing:false} : null);
     S._resume=null;
-    if(resume){
-      hardStop();
-      cur().src="api/stream/"+resume.id; cur().volume=S.volume;
-      if(resume.time>0.5) cur().addEventListener("loadedmetadata",function once(){
-        cur().currentTime=resume.time; cur().removeEventListener("loadedmetadata",once); drawTimes(); },{once:true});
-      S.playing=resume.playing; showPlayer();
-      if(S.playing){ const p=cur().play(); if(p&&p.catch)p.catch(()=>{}); }
-      updatePlay(); markPlayingRow(resume.id);
-    }
+    if(resume) loadAt(resume.id, resume.time, resume.playing);
     pushState();
     if(_syncBooted) toast("You're now the output device");
   } else if(S.role!=="output" && prevRole==="output"){
-    aud.forEach(a=>{ a._ft=(a._ft||0)+1; try{a.pause();}catch(e){} });
+    hardStop();
     stopKeepAlive();
     if(_syncBooted) toast("Switched to Control only");
   } else if(S.role===null && prevRole!=null && _syncBooted){
@@ -1446,7 +1521,21 @@ function connectSync(){
   _es.onmessage=e=>{
     if(e.data==="connected") return;
     let msg; try{ msg=JSON.parse(e.data); }catch(ex){ return; }
-    if(msg.type==="hello"){ applyState(msg.state); setRoleFromServer(msg.output,msg.peers); _syncBooted=true; }
+    if(msg.type==="hello"){
+      // If this connection is about to make us the output, don't run the
+      // stale broadcast state's track/queue/pos through applyState — that
+      // would clobber whatever the user already picked/clicked in the
+      // instant between page load and this (async, network-latency-bound)
+      // hello arriving, which is exactly the "opens as the wrong song"
+      // failure mode. Settings (volume/crossfade/shuffle/repeat/sleep) are
+      // still safe to inherit unconditionally. setRoleFromServer's own
+      // resume logic — which prefers whatever's already showing — decides
+      // what actually plays.
+      if(msg.output===CLIENT_ID){ if(msg.state) applySettings(msg.state); _lastState=msg.state; }
+      else applyState(msg.state);
+      setRoleFromServer(msg.output,msg.peers);
+      _syncBooted=true;
+    }
     else if(msg.type==="role") setRoleFromServer(msg.output,msg.peers);
     else if(msg.type==="state") applyState(msg.state);
     else if(msg.type==="cmd") applyCmd(msg.cmd);
@@ -1455,6 +1544,12 @@ function connectSync(){
 }
 addEventListener("pagehide",()=>{
   try{ navigator.sendBeacon("api/sync/leave", new Blob([JSON.stringify({cid:CLIENT_ID})],{type:"application/json"})); }catch(e){}
+});
+// A tab hidden mid-fade can suspend requestAnimationFrame before fade()'s own
+// wall-clock timeout catches up; sweeping on return-to-foreground closes that
+// last gap immediately instead of waiting out the timeout.
+addEventListener("visibilitychange",()=>{
+  if(document.visibilityState==="visible" && S.role==="output") enforceSingleAudio();
 });
 // self-correcting periodic republish while actually playing (output), and a
 // light local clock on controllers so their progress bar keeps moving between
