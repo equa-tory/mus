@@ -24,6 +24,7 @@ This is a two-file project: a FastAPI backend (`app.py`) and a single-file vanil
 - **Scanning** (`POST /api/scan`) runs in a background `threading.Thread`. Progress is tracked in the module-level `SCAN` dict and polled via `GET /api/scan/status`. Unchanged files (same mtime + size) are skipped for speed. Removed files are detected by comparing `last_scan` timestamps.
 - **Metadata** is read with `mutagen`. Cover art is extracted and saved to `DATA_DIR/art/<id>.jpg|.png`; the `has_art` / `art_ext` columns track what was found.
 - **Audio streaming** is a plain `FileResponse` — no transcoding, no range-request handling beyond what Starlette provides.
+- **Cross-device sync** (`POST /api/sync`, `GET /api/sync/events`) is a simple SSE fan-out: the latest state pushed by any client is held in the module-level `_SYNC_STATE` dict and broadcast to all connected clients via per-client `Queue`s. There's no per-session scoping — all connected browsers share one global playback state.
 
 ### Frontend (`static/index.html`)
 
@@ -33,4 +34,6 @@ All JS lives in a single IIFE inside the HTML file. State is in a single `S` obj
 - **Crossfade** is implemented with `requestAnimationFrame` volume ramps (`fade()`) applied to the outgoing and incoming elements simultaneously.
 - **Playback state** (queue, position, volume, shuffle, repeat, crossfade duration) is persisted to `localStorage` and restored on boot so playback resumes where the user left off.
 - **Smart playlists** are evaluated client-side in `smartIds()` against the in-memory `S.byId` map.
+- **Cross-device sync/remote control**: each browser has a `role` of `output` (plays audio, pushes full state including queue/position/time) or `controller` (sends play/pause/track intent, receives state but doesn't push time). Devices connect to `/api/sync/events` via `EventSource` and POST state changes to `/api/sync`. A device auto-switches to `controller` if it observes another device already playing and the user hasn't explicitly chosen a role.
 - Rendering is done by rebuilding the DOM directly (no virtual DOM); `content-visibility: auto` is used on rows for scroll performance.
+- The app is installable as a PWA (`static/manifest.json` + icons); there's no service worker, so it requires network connectivity.

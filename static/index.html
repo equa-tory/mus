@@ -111,18 +111,23 @@
   #bar{
     height:var(--bar-h);margin:0 8px;margin-bottom:calc(var(--safe) + 8px);
     background:var(--bg2);border:1px solid var(--line);border-radius:14px;
-    display:grid;grid-template-columns:46px 1fr auto auto auto auto auto;align-items:center;gap:6px;padding:0 8px 0 9px;
+    display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);align-items:center;gap:6px;padding:0 8px 0 9px;
     box-shadow:0 10px 30px rgba(0,0,0,.45);cursor:pointer;
   }
   #bar .progress{position:absolute;left:14px;right:14px;bottom:6px;height:2px;background:var(--line);border-radius:2px;overflow:hidden}
   #bar .progress i{display:block;height:100%;width:0;background:var(--accent)}
-  #barArt{width:46px;height:46px;border-radius:8px;object-fit:cover;background:var(--bg3)}
+  #barLeft{display:flex;align-items:center;gap:9px;min-width:0}
+  #barArt{width:46px;height:46px;border-radius:8px;object-fit:cover;background:var(--bg3);flex:none}
   #barMeta{min-width:0}
   #barTitle{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:500;font-size:14px}
   #barArtist{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--muted);font-size:12.5px}
+  #barRight{display:flex;align-items:center;gap:2px;justify-content:flex-end;min-width:0}
   #bar .ctrl{display:flex;align-items:center;gap:2px}
   #bar .ctrl button{width:40px;height:40px;display:grid;place-items:center;border-radius:50%;font-size:17px}
   #bar .ctrl button:hover{background:var(--bg3)}
+  #barShuffle,#barRepeat{width:34px;height:34px;font-size:15px;color:var(--muted2);display:grid;place-items:center;border-radius:50%}
+  #barShuffle:hover,#barRepeat:hover{background:var(--bg3);color:var(--text)}
+  #barShuffle.on,#barRepeat.on{color:var(--accent)}
 
   /* ---- player: expanded sheet ---- */
   #sheet{position:fixed;inset:0;z-index:40;background:var(--bg);transform:translateY(100%);
@@ -267,7 +272,22 @@
   @media(max-width:640px){.bar-vol{display:none}}
   #barQueue,#barMore{font-size:17px;color:var(--muted2);width:32px;height:40px;display:grid;place-items:center;border-radius:8px;flex:none}
   #barQueue:hover,#barMore:hover{color:var(--text);background:var(--bg3)}
-  @media(max-width:640px){#barQueue{display:none}}
+  @media(max-width:640px){
+    #barQueue{display:none}
+    #barShuffle,#barRepeat{display:none}
+    #bar{grid-template-columns:minmax(0,1fr) auto}
+  }
+
+  /* ---- bar queue popover ---- */
+  #queuePop{position:absolute;right:8px;bottom:calc(var(--bar-h) + var(--safe) + 16px);width:340px;
+    max-height:min(60vh,420px);background:var(--bg2);border:1px solid var(--line);border-radius:14px;
+    box-shadow:0 16px 44px rgba(0,0,0,.55);display:none;flex-direction:column;z-index:31}
+  #queuePop.open{display:flex}
+  #queuePop .phead{display:flex;align-items:center;justify-content:space-between;padding:14px 16px 8px}
+  #queuePop .phead b{font-size:15px}
+  #queuePop .phead button{color:var(--muted);font-size:14px}
+  #queuePop .pbody{overflow-y:auto;padding:0 8px 10px}
+  @media(max-width:640px){#queuePop{left:8px;right:8px;width:auto}}
   #roleBtn{width:100%;margin-top:8px;text-align:center;font-size:13px}
   #roleBtn.ctrl{border-color:var(--accent-dim);color:var(--accent)}
 </style>
@@ -283,18 +303,28 @@
 
   <section id="player" class="hidden">
     <div id="bar">
-      <img id="barArt" alt="">
-      <div id="barMeta"><div id="barTitle"></div><div id="barArtist"></div></div>
-      <button id="barLike" title="Like">♡</button>
-      <input id="barVol" class="bar-vol" type="range" min="0" max="100" value="90">
-      <button id="barQueue" title="Queue">☰</button>
-      <button id="barMore" title="More">⋯</button>
+      <div id="barLeft">
+        <img id="barArt" alt="">
+        <div id="barMeta"><div id="barTitle"></div><div id="barArtist"></div></div>
+      </div>
       <div class="ctrl">
+        <button id="barShuffle" title="Shuffle">⤮</button>
         <button id="barPrev" title="Previous">⏮</button>
         <button id="barPlay" title="Play">▶</button>
         <button id="barNext" title="Next">⏭</button>
+        <button id="barRepeat" title="Repeat">↻</button>
+      </div>
+      <div id="barRight">
+        <button id="barLike" title="Like">♡</button>
+        <input id="barVol" class="bar-vol" type="range" min="0" max="100" value="90">
+        <button id="barQueue" title="Queue">☰</button>
+        <button id="barMore" title="More">⋯</button>
       </div>
       <div class="progress"><i id="barFill"></i></div>
+    </div>
+    <div id="queuePop">
+      <div class="phead"><b>Queue</b><button id="closeQueuePop">Done</button></div>
+      <div class="pbody" id="queuePopBody"></div>
     </div>
 
     <div id="sheet">
@@ -650,7 +680,7 @@ function playFrom(ids,i){
 // shuffle-play the given id list from a random position (enables shuffle)
 function shufflePlay(ids){
   if(!ids.length) return;
-  S.shuffle=true; $("#shuffle").classList.add("on");
+  S.shuffle=true; syncShuffleUI();
   playFrom(ids, Math.floor(Math.random()*ids.length));
   persist();
 }
@@ -786,9 +816,9 @@ async function toggleLike(id){
 }
 
 // ---- expand / collapse sheet ----
-function expand(){ $("#sheet").classList.add("open"); }
+function expand(){ closeQueuePop(); $("#sheet").classList.add("open"); }
 function collapse(){ $("#sheet").classList.remove("open"); closePanels(); }
-$("#bar").addEventListener("click",e=>{ if(!e.target.closest(".ctrl")&&!["barLike","barVol","barQueue","barMore"].includes(e.target.id)) expand(); });
+$("#bar").addEventListener("click",e=>{ if(!e.target.closest(".ctrl")&&!["barLike","barVol","barQueue","barMore","barShuffle","barRepeat"].includes(e.target.id)) expand(); });
 $("#collapse").onclick=collapse;
 $("#barPlay").onclick=e=>{e.stopPropagation();togglePlay();};
 $("#barNext").onclick=e=>{e.stopPropagation();nextTrack();};
@@ -796,7 +826,14 @@ $("#barPrev").onclick=e=>{e.stopPropagation();prevTrack();};
 $("#npPlay").onclick=togglePlay; $("#next").onclick=nextTrack; $("#prev").onclick=prevTrack;
 $("#npLike").onclick=()=>{ const id=currentId(); if(id!=null) toggleLike(id); };
 $("#barLike").onclick=e=>{ e.stopPropagation(); const id=currentId(); if(id!=null) toggleLike(id); };
-$("#barQueue").onclick=e=>{ e.stopPropagation(); expand(); renderQueue(); openPanel($("#queuePanel")); };
+function closeQueuePop(){ $("#queuePop").classList.remove("open"); }
+$("#barQueue").onclick=e=>{ e.stopPropagation(); renderQueue(); $("#queuePop").classList.toggle("open"); };
+$("#closeQueuePop").onclick=closeQueuePop;
+document.addEventListener("click",e=>{
+  if(!$("#queuePop").classList.contains("open")) return;
+  if(e.target.closest("#queuePop")||e.target.id==="barQueue") return;
+  closeQueuePop();
+});
 $("#barMore").onclick=e=>{ e.stopPropagation(); const id=currentId(); if(id!=null) openMenu(e.currentTarget,id); };
 $("#roleBtn").onclick=()=>setRole(S.role==="output"?"controller":"output");
 
@@ -840,11 +877,21 @@ $(".brand").onclick=()=>{ S.view="library"; S.openPlaylist=null; S.search=""; $(
   },{passive:true});
 });
 
-$("#shuffle").onclick=()=>{ S.shuffle=!S.shuffle; $("#shuffle").classList.toggle("on",S.shuffle);
-  const id=currentId(); if(id!=null){ buildOrder(S.queue.indexOf(id)); } renderQueue(); persist(); syncState(); };
-$("#repeat").onclick=()=>{ S.repeat=S.repeat==="off"?"all":S.repeat==="all"?"one":"off";
-  const b=$("#repeat"); b.classList.toggle("on",S.repeat!=="off"); b.textContent=S.repeat==="one"?"↻¹":"↻";
-  b.title="Repeat: "+S.repeat; persist(); syncState(); };
+function syncShuffleUI(){ [$("#shuffle"),$("#barShuffle")].forEach(b=>b.classList.toggle("on",S.shuffle)); }
+function syncRepeatUI(){
+  const on=S.repeat!=="off", label=S.repeat==="one"?"↻¹":"↻";
+  [$("#repeat"), $("#barRepeat")].forEach(b=>{
+    b.classList.toggle("on",on); b.textContent=label; b.title="Repeat: "+S.repeat;
+  });
+}
+function toggleShuffle(){ S.shuffle=!S.shuffle; syncShuffleUI();
+  const id=currentId(); if(id!=null){ buildOrder(S.queue.indexOf(id)); } renderQueue(); persist(); syncState(); }
+function cycleRepeat(){ S.repeat=S.repeat==="off"?"all":S.repeat==="all"?"one":"off";
+  syncRepeatUI(); persist(); syncState(); }
+$("#shuffle").onclick=toggleShuffle;
+$("#repeat").onclick=cycleRepeat;
+$("#barShuffle").onclick=e=>{ e.stopPropagation(); toggleShuffle(); };
+$("#barRepeat").onclick=e=>{ e.stopPropagation(); cycleRepeat(); };
 
 // ---- seek + volume + crossfade ----
 const seek=$("#seek");
@@ -877,8 +924,8 @@ $("#openQueue").onclick=()=>{ renderQueue(); openPanel($("#queuePanel")); };
 $("#closeQueue").onclick=closePanels;
 $("#openSleep").onclick=()=>{ renderSleep(); openPanel($("#sleepPanel")); };
 $("#closeSleep").onclick=closePanels;
-function renderQueue(){
-  const body=$("#queueBody"); body.innerHTML="";
+function fillQueue(body){
+  body.innerHTML="";
   for(let i=S.pos;i<S.order.length;i++){
     const id=S.queue[S.order[i]], t=tr(id); if(!t) continue;
     const it=el("div","qitem"+(i===S.pos?" cur":""));
@@ -891,9 +938,10 @@ function renderQueue(){
     it.onclick=e=>{ if(e.target===x) return; S.pos=i; transitionTo(currentId(),FADE); };
     body.appendChild(it);
   }
-  if(S.pos>=S.order.length-0 && !body.children.length){
+  if(!body.children.length){
     body.innerHTML='<div class="empty" style="min-height:120px"><p>Queue is empty.</p></div>'; }
 }
+function renderQueue(){ fillQueue($("#queueBody")); fillQueue($("#queuePopBody")); }
 
 // ---- sleep timer ----
 let sleepTick=null;
@@ -1089,7 +1137,7 @@ addEventListener("keydown",e=>{
   else if(e.code==="ArrowLeft" && e.shiftKey) prevTrack();
   else if(e.code==="ArrowRight"){ cur().currentTime=Math.min((cur().duration||0),cur().currentTime+10); }
   else if(e.code==="ArrowLeft"){ cur().currentTime=Math.max(0,cur().currentTime-10); }
-  else if(e.code==="Escape") collapse();
+  else if(e.code==="Escape"){ if($("#queuePop").classList.contains("open")) closeQueuePop(); else collapse(); }
 });
 
 // ---- persistence (per device) ----
@@ -1107,8 +1155,7 @@ function restore(){
   vol.value=Math.round(S.volume*100); vol.style.setProperty("--fill",(S.volume*100)+"%");
   barVol.value=vol.value; barVol.style.setProperty("--fill",(S.volume*100)+"%");
   xfadeEl.value=S.crossfade; xfadeEl.style.setProperty("--fill",(S.crossfade/30*100)+"%"); syncXfadeLabel();
-  $("#shuffle").classList.toggle("on",S.shuffle);
-  if(S.repeat!=="off"){ $("#repeat").classList.add("on"); $("#repeat").textContent=S.repeat==="one"?"↻¹":"↻"; }
+  syncShuffleUI(); syncRepeatUI();
   aud.forEach(a=>a.volume=S.volume);
   // sync roleBtn label (S.role already set from localStorage above init)
   const rb=$("#roleBtn"); if(rb){ rb.textContent=S.role==="output"?"🔊 Output":"🎮 Control only"; rb.classList.toggle("ctrl",S.role!=="output"); }
@@ -1167,12 +1214,10 @@ function applySync(d){
     if(Array.isArray(d.order)) S.order=d.order;
     if(typeof d.pos==="number") S.pos=d.pos;
     if(typeof d.shuffle==="boolean"&&d.shuffle!==S.shuffle){
-      S.shuffle=d.shuffle; $("#shuffle").classList.toggle("on",S.shuffle);
+      S.shuffle=d.shuffle; syncShuffleUI();
     }
     if(d.repeat&&d.repeat!==S.repeat){
-      S.repeat=d.repeat; const rb=$("#repeat");
-      rb.classList.toggle("on",S.repeat!=="off");
-      rb.textContent=S.repeat==="one"?"↻¹":"↻"; rb.title="Repeat: "+S.repeat;
+      S.repeat=d.repeat; syncRepeatUI();
     }
     if(typeof d.volume==="number"&&d.volume!==S.volume){
       S.volume=d.volume; const pct=Math.round(d.volume*100);
