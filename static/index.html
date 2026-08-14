@@ -403,8 +403,8 @@ const S = {
   search:"", listIds:[], historyIds:[],
   queue:[], order:[], pos:0, shuffle:false, repeat:"off",
   volume:0.9, crossfade:4, playing:false,
-  sleep:null, _xfading:false, _counted:false, _seeking:false, role:"output", _ctrlTime:null,
-  playlists:[],
+  sleep:null, _xfading:false, _counted:false, _seeking:false, role:null, _ctrlTime:null, _ctrlTimeAt:null,
+  playlists:[], syncPeers:0,
 };
 const TABS = [["library","Library"],["recent","Recently added"],["liked","Liked"],
               ["most","Most played"],["history","History"],["playlists","Playlists"]];
@@ -685,6 +685,7 @@ function showPlayer(){ $("#player").classList.remove("hidden"); }
 function playFrom(ids,i){
   S.queue=ids.slice(); buildOrder(i);
   showPlayer(); transitionTo(currentId(), FADE);
+  if(S.role!=="output") cmdPlayTrack();
 }
 // shuffle-play the given id list from a random position (enables shuffle)
 function shufflePlay(ids){
@@ -733,22 +734,23 @@ function setArt(img,url){ if(url){ img.style.visibility="visible"; img.src=url; 
 
 function togglePlay(){
   if(!currentId()) return;
-  if(S.role==="output"){
-    if(S.playing){ S.playing=false; fade(cur(),0,FADE,()=>cur().pause()); }
-    else { S.playing=true; ensureKeepAlive(); const p=cur().play(); if(p&&p.catch)p.catch(()=>{}); fade(cur(),S.volume,FADE); }
-  } else {
-    S.playing=!S.playing; // controller: flip state and let output respond to sync
-  }
+  if(S.role!=="output"){ sendCmd({name:"toggle"}); return; }
+  if(S.playing){ S.playing=false; fade(cur(),0,FADE,()=>cur().pause()); }
+  else { S.playing=true; ensureKeepAlive(); const p=cur().play(); if(p&&p.catch)p.catch(()=>{}); fade(cur(),S.volume,FADE); }
   updatePlay(); markPlayingRow(currentId()); persist(); syncState();
 }
-function nextTrack(){ const id=peekNext(); if(id!=null) transitionTo(id,FADE); }
+function nextTrack(){
+  if(S.role!=="output"){ sendCmd({name:"next"}); return; }
+  const id=peekNext(); if(id!=null) transitionTo(id,FADE);
+}
 function prevTrack(){
+  if(S.role!=="output"){ sendCmd({name:"prev"}); return; }
   if(cur().currentTime>3){ cur().currentTime=0; return; }
   if(S.pos>0){ S.pos--; transitionTo(currentId(),FADE); }
   else if(S.repeat==="all"){ S.pos=S.order.length-1; transitionTo(currentId(),FADE); }
   else cur().currentTime=0;
 }
-function stopPlay(){ S.playing=false; fade(cur(),0,FADE,()=>cur().pause()); updatePlay(); markPlayingRow(null); persist(); }
+function stopPlay(){ S.playing=false; fade(cur(),0,FADE,()=>cur().pause()); updatePlay(); markPlayingRow(null); persist(); syncState(); }
 
 function onTime(e){
   if(e.target!==cur()) return;
@@ -822,6 +824,7 @@ async function toggleLike(id){
     $("#barLike").classList.toggle("on",liked); $("#barLike").textContent=liked?"♥":"♡";
   }
   if(S.view==="liked") render();
+  if(id===currentId()) sendCmd({name:"like",value:{id,liked}});
 }
 
 // ---- expand / collapse sheet ----
@@ -844,7 +847,7 @@ document.addEventListener("click",e=>{
   closeQueuePop();
 });
 $("#barMore").onclick=e=>{ e.stopPropagation(); const id=currentId(); if(id!=null) openMenu(e.currentTarget,id); };
-$("#roleBtn").onclick=()=>setRole(S.role==="output"?"controller":"output");
+$("#roleBtn").onclick=()=>{ S.role==="output" ? releaseOutput() : claimOutput(); };
 
 // ---- brand → library ----
 $(".brand").onclick=()=>{ S.view="library"; S.openPlaylist=null; S.search=""; $("#search").value=""; render(); listEl.scrollTop=0; };
@@ -893,37 +896,75 @@ function syncRepeatUI(){
     b.classList.toggle("on",on); b.textContent=label; b.title="Repeat: "+S.repeat;
   });
 }
-function toggleShuffle(){ S.shuffle=!S.shuffle; syncShuffleUI();
-  const id=currentId(); if(id!=null){ buildOrder(S.queue.indexOf(id)); } renderQueue(); persist(); syncState(); }
-function cycleRepeat(){ S.repeat=S.repeat==="off"?"all":S.repeat==="all"?"one":"off";
-  syncRepeatUI(); persist(); syncState(); }
+// setShuffle/setRepeat are the "apply this exact value" primitives, reused both
+// by the local toggle buttons (output) and by applyCmd (output executing a
+// command sent from a controller) — toggleShuffle/cycleRepeat compute the next
+// value and either apply it directly (output) or ask the output to (controller).
+function setShuffle(v){
+  S.shuffle=v; syncShuffleUI();
+  const id=currentId(); if(id!=null){ buildOrder(S.queue.indexOf(id)); } renderQueue(); persist(); syncState();
+}
+function setRepeat(v){ S.repeat=v; syncRepeatUI(); persist(); syncState(); }
+function toggleShuffle(){
+  const next=!S.shuffle;
+  if(S.role!=="output"){ S.shuffle=next; syncShuffleUI(); sendCmd({name:"shuffle",value:next}); return; }
+  setShuffle(next);
+}
+function cycleRepeat(){
+  const next=S.repeat==="off"?"all":S.repeat==="all"?"one":"off";
+  if(S.role!=="output"){ S.repeat=next; syncRepeatUI(); sendCmd({name:"repeat",value:next}); return; }
+  setRepeat(next);
+}
 $("#shuffle").onclick=toggleShuffle;
 $("#repeat").onclick=cycleRepeat;
 $("#barShuffle").onclick=e=>{ e.stopPropagation(); toggleShuffle(); };
 $("#barRepeat").onclick=e=>{ e.stopPropagation(); cycleRepeat(); };
 
 // ---- seek + volume + crossfade ----
+// debounced remote command sender, shared by drag-style controls (volume/crossfade)
+// so continuous `input` events don't flood the server with one POST per pixel.
+let _cmdT={};
+function sendCmdSoon(name,value,ms=150){
+  clearTimeout(_cmdT[name]);
+  _cmdT[name]=setTimeout(()=>sendCmd({name,value}),ms);
+}
 const seek=$("#seek");
 seek.addEventListener("input",()=>{ S._seeking=true; seek.style.setProperty("--fill",(seek.value/10)+"%");
   const a=cur(),dur=a.duration||tr(currentId())?.duration||0; $("#tCur").textContent=fmt(dur*seek.value/1000); });
-seek.addEventListener("change",()=>{ const a=cur(),dur=a.duration||tr(currentId())?.duration||0;
-  if(dur) a.currentTime=dur*seek.value/1000; S._seeking=false; persist(); syncState(); });
-const vol=$("#vol");
-vol.addEventListener("input",()=>{ S.volume=vol.value/100; vol.style.setProperty("--fill",vol.value+"%");
-  const bv=$("#barVol"); bv.value=vol.value; bv.style.setProperty("--fill",vol.value+"%");
-  const a=cur(); a._ft=(a._ft||0)+1; a.volume=S.volume; persist(); });
+seek.addEventListener("change",()=>{
+  const dur=(S.role==="output"?cur().duration:0)||tr(currentId())?.duration||0;
+  const time=dur*seek.value/1000; S._seeking=false;
+  seekTo(time);
+});
+// seekTo is the "apply this exact time" primitive, reused by the local seek bar
+// (output) and by applyCmd (output executing a remote seek from a controller).
+function seekTo(time){
+  if(S.role!=="output"){ S._ctrlTime=time; S._ctrlTimeAt=performance.now(); drawTimes(); sendCmd({name:"seek",value:time}); return; }
+  const dur=cur().duration||tr(currentId())?.duration||0;
+  if(dur) cur().currentTime=Math.max(0,Math.min(dur,time));
+  persist(); syncState();
+}
+const vol=$("#vol"), barVol=$("#barVol");
+function setVolume(v){
+  S.volume=v; const pct=Math.round(v*100);
+  vol.value=pct; vol.style.setProperty("--fill",pct+"%");
+  barVol.value=pct; barVol.style.setProperty("--fill",pct+"%");
+  if(S.role==="output"){ const a=cur(); a._ft=(a._ft||0)+1; a.volume=S.volume; }
+}
+function onVolInput(pct){
+  setVolume(pct/100); persist();
+  if(S.role==="output") syncState(); else sendCmdSoon("volume",S.volume);
+}
+vol.addEventListener("input",()=>onVolInput(+vol.value));
+barVol.addEventListener("input",()=>onVolInput(+barVol.value));
 const xfadeEl=$("#xfade"), xfadeLbl=$("#xfadeLabel");
 function syncXfadeLabel(){ xfadeLbl.textContent="Crossfade · "+(S.crossfade===0?"off":S.crossfade+"s"); }
+function setCrossfade(n){
+  S.crossfade=n; xfadeEl.value=n; xfadeEl.style.setProperty("--fill",(n/30*100)+"%"); syncXfadeLabel();
+}
 xfadeEl.addEventListener("input",()=>{
-  S.crossfade=+xfadeEl.value;
-  xfadeEl.style.setProperty("--fill",(S.crossfade/30*100)+"%");
-  syncXfadeLabel(); persist();
-});
-const barVol=$("#barVol");
-barVol.addEventListener("input",()=>{
-  S.volume=barVol.value/100; barVol.style.setProperty("--fill",barVol.value+"%");
-  vol.value=barVol.value; vol.style.setProperty("--fill",barVol.value+"%");
-  const a=cur(); a._ft=(a._ft||0)+1; a.volume=S.volume; persist();
+  setCrossfade(+xfadeEl.value); persist();
+  if(S.role==="output") syncState(); else sendCmdSoon("crossfade",S.crossfade);
 });
 
 // ---- queue panel ----
@@ -948,9 +989,11 @@ function fillQueue(body){
     m.querySelector(".qs>span").textContent=t.artist;
     const x=el("button","qx"); x.textContent=i===S.pos?"♪":"✕";
     if(i!==S.pos) x.onclick=()=>{ const realIdx=S.order[i]; S.order.splice(i,1);
-      S.queue.splice(realIdx,1); S.order=S.order.map(v=>v>realIdx?v-1:v); renderQueue(); syncState(); };
+      S.queue.splice(realIdx,1); S.order=S.order.map(v=>v>realIdx?v-1:v); renderQueue();
+      if(S.role==="output") syncState(); else cmdQueue(); };
     it.append(art,m,x);
-    it.onclick=e=>{ if(e.target===x) return; S.pos=i; transitionTo(currentId(),FADE); };
+    it.onclick=e=>{ if(e.target===x) return; S.pos=i; transitionTo(currentId(),FADE);
+      if(S.role!=="output") cmdPlayTrack(); };
     it.addEventListener("mouseenter",()=>{
       [m.querySelector(".qt"),m.querySelector(".qs")].forEach(line=>{
         const sp=line.firstChild, over=sp.scrollWidth-line.clientWidth;
@@ -980,22 +1023,28 @@ function renderSleep(){
     const r=el("span"); r.id="sleepRemain";
     if(active && typeof val==="number") r.textContent=fmt((S.sleep.until-Date.now())/1000);
     o.appendChild(r);
-    o.onclick=()=>setSleep(val); body.appendChild(o);
+    o.onclick=()=>{ if(S.role==="output") setSleep(val); else sendCmd({name:"sleep",value:val}); };
+    body.appendChild(o);
   });
 }
+// The sleep timer only ever runs on the output device (it's the one that can
+// actually pause audio); controllers just mirror S.sleep from synced state.
 function setSleep(val){
   clearSleep();
-  if(val==="off"){ renderSleep(); toast("Sleep timer off"); return; }
-  if(val==="track"){ S.sleep={endOfTrack:true}; renderSleep(); toast("Will stop after this track"); return; }
+  if(val==="off"){ renderSleep(); syncState(); toast("Sleep timer off"); return; }
+  if(val==="track"){ S.sleep={endOfTrack:true}; renderSleep(); syncState(); toast("Will stop after this track"); return; }
   S.sleep={mins:val, until:Date.now()+val*60000};
   sleepTick=setInterval(()=>{
     const left=S.sleep.until-Date.now();
     const r=$("#sleepRemain"); if(r) r.textContent=fmt(left/1000);
-    if(left<=0){ fade(cur(),0,2,()=>cur().pause()); S.playing=false; updatePlay(); clearSleep(); toast("Paused — sleep timer"); }
+    if(left<=0){ fade(cur(),0,2,()=>cur().pause()); S.playing=false; updatePlay(); clearSleep(); syncState(); toast("Paused — sleep timer"); }
   },1000);
-  renderSleep(); toast("Sleeping in "+val+" min");
+  renderSleep(); syncState(); toast("Sleeping in "+val+" min");
 }
 function clearSleep(){ if(sleepTick) clearInterval(sleepTick); sleepTick=null; S.sleep=null; }
+// A controller-side cmd for sleep is handled entirely by the output; a controller
+// only ever *displays* S.sleep from synced state, so re-render if the panel is open.
+function displaySleep(sleep){ S.sleep=sleep||null; if($("#sleepPanel").classList.contains("open")) renderSleep(); }
 
 // ---- per-row context menu ----
 let scrim=null;
@@ -1020,16 +1069,22 @@ function openMenu(anchor, id){
 }
 function ensureQueue(){ if(!S.queue.length && currentId()==null){} }
 function playNext(id){
-  if(!S.queue.length){ S.queue=[id]; buildOrder(0); showPlayer(); transitionTo(id,FADE); return; }
+  if(!S.queue.length){ S.queue=[id]; buildOrder(0); showPlayer(); transitionTo(id,FADE);
+    if(S.role!=="output") cmdPlayTrack();
+    return; }
   const insertReal=S.order[S.pos]+1;
   S.queue.splice(insertReal,0,id);
   S.order=S.order.map(v=>v>=insertReal?v+1:v);
   S.order.splice(S.pos+1,0,insertReal);
-  renderQueue(); toast("Playing next"); syncState();
+  renderQueue(); toast("Playing next");
+  if(S.role==="output") syncState(); else cmdQueue();
 }
 function addQueue(id){
-  if(!S.queue.length){ S.queue=[id]; buildOrder(0); showPlayer(); transitionTo(id,FADE); return; }
-  S.queue.push(id); S.order.push(S.queue.length-1); renderQueue(); toast("Added to queue"); syncState();
+  if(!S.queue.length){ S.queue=[id]; buildOrder(0); showPlayer(); transitionTo(id,FADE);
+    if(S.role!=="output") cmdPlayTrack();
+    return; }
+  S.queue.push(id); S.order.push(S.queue.length-1); renderQueue(); toast("Added to queue");
+  if(S.role==="output") syncState(); else cmdQueue();
 }
 async function addToPlaylist(pid,tid){
   await fetch("api/playlists/"+pid+"/tracks",{method:"POST",headers:{"Content-Type":"application/json"},
@@ -1172,24 +1227,20 @@ function persist(){ clearTimeout(pT); pT=setTimeout(()=>{
 function restore(){
   let d; try{ d=JSON.parse(localStorage.getItem("player")||"null"); }catch(e){}
   if(!d) return;
-  _applyingSync=true; // suppress outgoing sync during restore
+  _applyingSync=true; // local-only restore; suppress any outgoing sync until connected
   S.volume=d.volume??0.9; S.crossfade=d.crossfade??4; S.shuffle=!!d.shuffle; S.repeat=d.repeat||"off";
   vol.value=Math.round(S.volume*100); vol.style.setProperty("--fill",(S.volume*100)+"%");
   barVol.value=vol.value; barVol.style.setProperty("--fill",(S.volume*100)+"%");
   xfadeEl.value=S.crossfade; xfadeEl.style.setProperty("--fill",(S.crossfade/30*100)+"%"); syncXfadeLabel();
   syncShuffleUI(); syncRepeatUI();
   aud.forEach(a=>a.volume=S.volume);
-  // sync roleBtn label (S.role already set from localStorage above init)
-  const rb=$("#roleBtn"); if(rb){ rb.textContent=S.role==="output"?"🔊 Output":"🎮 Control only"; rb.classList.toggle("ctrl",S.role!=="output"); }
   if(d.id!=null && S.byId.has(d.id) && Array.isArray(d.queue) && d.queue.length){
     S.queue=d.queue; S.order=d.order&&d.order.length===d.queue.length?d.order:[...d.queue.keys()];
     S.pos=d.pos||0; showPlayer();
-    if(S.role==="output"){
-      // cue the last track paused at saved position; play resumes on user gesture
-      cur().src="api/stream/"+d.id; cur().volume=S.volume;
-      cur().addEventListener("loadedmetadata",function once(){ cur().currentTime=d.time||0;
-        cur().removeEventListener("loadedmetadata",once); drawTimes(); },{once:true});
-    }
+    // Don't touch <audio> yet — we don't know if the server will make us the
+    // output. Stash it; the sync handshake decides once the role is known,
+    // preferring the server's live state over this possibly-stale local copy.
+    S._resume={id:d.id, time:d.time||0};
     S.playing=false; onTrackChanged(d.id); updatePlay();
   }
   _applyingSync=false;
@@ -1203,126 +1254,225 @@ function toast(msg){ const t=$("#toast"); t.textContent=msg; t.classList.add("sh
 addEventListener("scroll",closeMenu,true);
 
 // ---- cross-device sync ----
+// One connected client is the "output" (owns the <audio> elements); everyone
+// else is a "controller" that mirrors state and sends intent. The server is
+// the sole authority over who the output is (see /api/sync/events, app.py) —
+// a client can never take over audio just by opening the page. Controllers
+// publish *commands* (sendCmd); only the output publishes *state* (pushState).
 const CLIENT_ID=Math.random().toString(36).slice(2,10);
-let _applyingSync=false, _syncT=null, _lastSyncState=null;
-let _autoRoleDone=!!localStorage.getItem("role");
-S.role=localStorage.getItem("role")||"output";
-function syncState(){
-  if(_applyingSync) return;
-  clearTimeout(_syncT);
-  _syncT=setTimeout(()=>{
-    const id=currentId(); if(id==null) return;
-    const isOut=S.role==="output";
-    const payload={clientId:CLIENT_ID,playing:S.playing,shuffle:S.shuffle,repeat:S.repeat};
-    if(isOut){
-      payload.id=id; payload.queue=S.queue; payload.order=S.order; payload.pos=S.pos;
-      payload.time=cur().currentTime; payload.volume=S.volume; payload.crossfade=S.crossfade;
-    } else if(_lastSyncState){
-      // only send queue/id once we've received state from output; prevents stale restore overwriting output
-      payload.id=id; payload.queue=S.queue; payload.order=S.order; payload.pos=S.pos;
-    }
-    fetch("api/sync",{method:"POST",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify(payload)
-    }).catch(()=>{});
-  },300);
+let _applyingSync=false, _syncT=null, _lastState=null, _syncBooted=false;
+
+function sendCmd(cmd){
+  fetch("api/sync/cmd",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({cid:CLIENT_ID,cmd})}).catch(()=>{});
 }
-function applySync(d){
-  if(!d||d.clientId===CLIENT_ID) return;
-  _lastSyncState=d;
+function cmdPlayTrack(){ sendCmd({name:"playTrack",value:{queue:S.queue,order:S.order,pos:S.pos,shuffle:S.shuffle}}); }
+function cmdQueue(){ sendCmd({name:"queue",value:{queue:S.queue,order:S.order,pos:S.pos}}); }
+
+function currentStatePayload(){
+  const id=currentId();
+  return { id, queue:S.queue, order:S.order, pos:S.pos, playing:S.playing,
+    time: id!=null?cur().currentTime:0,
+    shuffle:S.shuffle, repeat:S.repeat, volume:S.volume, crossfade:S.crossfade, sleep:S.sleep };
+}
+function pushState(){
+  if(S.role!=="output") return;
+  fetch("api/sync/state",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({cid:CLIENT_ID,state:currentStatePayload()})}).catch(()=>{});
+}
+// debounced publish, called after any local mutation on the output (mirrors
+// the old syncState() name/shape so existing call sites don't need to change)
+function syncState(){
+  if(_applyingSync||S.role!=="output") return;
+  clearTimeout(_syncT);
+  _syncT=setTimeout(pushState,300);
+}
+// cancel any in-flight fade/crossfade on both elements and silence them —
+// used before loading a synced track so a half-finished crossfade can't leave
+// the previous track audible under the new one.
+function hardStop(){
+  aud.forEach(a=>{ a._ft=(a._ft||0)+1; try{a.pause();}catch(e){} a.volume=S.volume; });
+}
+
+// Applies a full state snapshot published by the output. The published `id`
+// is the single source of truth: pos is repaired to agree with it rather than
+// trusting queue/order/pos in isolation, which is what keeps the displayed
+// title and the actually-loaded audio from ever disagreeing.
+function applyState(st){
+  if(!st) return;
+  _lastState=st;
   _applyingSync=true;
   try{
     const prevId=currentId();
-    if(Array.isArray(d.queue)) S.queue=d.queue;
-    if(Array.isArray(d.order)) S.order=d.order;
-    if(typeof d.pos==="number") S.pos=d.pos;
-    if(typeof d.shuffle==="boolean"&&d.shuffle!==S.shuffle){
-      S.shuffle=d.shuffle; syncShuffleUI();
+    if(Array.isArray(st.queue)) S.queue=st.queue;
+    if(Array.isArray(st.order)) S.order=st.order;
+    if(typeof st.pos==="number") S.pos=st.pos;
+    if(st.id!=null && S.queue.length){
+      const realIdx=S.queue.indexOf(st.id);
+      if(realIdx!==-1){ const slot=S.order.indexOf(realIdx); if(slot!==-1) S.pos=slot; }
     }
-    if(d.repeat&&d.repeat!==S.repeat){
-      S.repeat=d.repeat; syncRepeatUI();
-    }
-    if(typeof d.volume==="number"&&d.volume!==S.volume){
-      S.volume=d.volume; const pct=Math.round(d.volume*100);
-      vol.value=pct; vol.style.setProperty("--fill",pct+"%");
-      barVol.value=pct; barVol.style.setProperty("--fill",pct+"%");
-      if(S.role==="output") aud.forEach(a=>a.volume=S.volume);
-    }
-    if(typeof d.crossfade==="number"&&d.crossfade!==S.crossfade){
-      S.crossfade=d.crossfade;
-      xfadeEl.value=d.crossfade; xfadeEl.style.setProperty("--fill",(d.crossfade/30*100)+"%");
-      syncXfadeLabel();
-    }
-    if(typeof d.time==="number"&&S.role!=="output"){
-      S._ctrlTime=d.time; drawTimes();
-    }
-    if(d.id!=null&&S.byId.has(d.id)){
-      if(d.id!==prevId){
-        if(S.role==="output"){
-          S.playing=false; cur().pause();
-          cur().src="api/stream/"+d.id; cur().volume=S.volume;
-          if(d.playing){ S.playing=true; ensureKeepAlive(); const p=cur().play(); if(p&&p.catch)p.catch(()=>{}); }
-        } else {
-          S.playing=!!d.playing;
-        }
-        showPlayer(); onTrackChanged(d.id); updatePlay(); markPlayingRow(d.id);
-      } else if(d.playing!==S.playing){
-        if(S.role==="output"){
-          if(d.playing){ S.playing=true; ensureKeepAlive(); cur().volume=S.volume; cur().play().catch(()=>{}); }
+    if(typeof st.shuffle==="boolean"&&st.shuffle!==S.shuffle){ S.shuffle=st.shuffle; syncShuffleUI(); }
+    if(st.repeat&&st.repeat!==S.repeat){ S.repeat=st.repeat; syncRepeatUI(); }
+    if(typeof st.volume==="number"&&st.volume!==S.volume) setVolume(st.volume);
+    if(typeof st.crossfade==="number"&&st.crossfade!==S.crossfade) setCrossfade(st.crossfade);
+    displaySleep(st.sleep);
+    if(typeof st.time==="number"&&S.role!=="output"){ S._ctrlTime=st.time; S._ctrlTimeAt=performance.now(); drawTimes(); }
+
+    const id=st.id;
+    if(id!=null&&S.byId.has(id)){
+      const trackChanged=id!==prevId;
+      if(S.role==="output"){
+        if(trackChanged){
+          hardStop();
+          transitionTo(id,0);
+          if(!st.playing){ S.playing=false; fade(cur(),0,0); cur().pause(); updatePlay(); markPlayingRow(id); }
+        } else if(typeof st.playing==="boolean"&&st.playing!==S.playing){
+          if(st.playing){ S.playing=true; ensureKeepAlive(); cur().volume=S.volume; cur().play().catch(()=>{}); }
           else { S.playing=false; cur().pause(); }
-        } else {
-          S.playing=d.playing;
+          updatePlay(); markPlayingRow(id);
         }
-        updatePlay(); markPlayingRow(d.id);
+      } else {
+        if(typeof st.playing==="boolean") S.playing=st.playing;
+        if(trackChanged){ showPlayer(); onTrackChanged(id); }
+        updatePlay(); markPlayingRow(id);
       }
     }
     renderQueue();
-  }finally{ _applyingSync=false; }
+  } finally { _applyingSync=false; }
 }
-function setRole(role){
-  S.role=role; _autoRoleDone=true;
-  const isOut=role==="output";
-  const rb=$("#roleBtn");
-  rb.textContent=isOut?"🔊 Output":"🎮 Control only";
-  rb.classList.toggle("ctrl",!isOut);
-  if(!isOut){
-    aud.forEach(a=>{ a._ft=(a._ft||0)+1; a.pause(); });
-    stopKeepAlive();
-  } else {
-    ensureKeepAlive();
-    aud.forEach(a=>a.volume=S.volume);
-    if(_lastSyncState&&_lastSyncState.id!=null&&S.byId.has(_lastSyncState.id)){
-      const ls=_lastSyncState;
-      cur().src="api/stream/"+ls.id; cur().volume=S.volume;
-      if(typeof ls.time==="number"&&ls.time>2)
-        cur().addEventListener("loadedmetadata",function once(){
-          cur().currentTime=ls.time; cur().removeEventListener("loadedmetadata",once); },{once:true});
-      if(ls.playing) cur().play().catch(()=>{});
-    } else if(S.playing&&currentId()){
-      cur().volume=S.volume; cur().play().catch(()=>{});
+
+// Applies a command sent by some other client. "like" is metadata-only and
+// safe for every client to reflect immediately; everything else is playback
+// or a setting, so only the output actually executes it — it reuses the same
+// local functions the output's own UI calls, which end in syncState()/
+// pushState(), so the result is broadcast back out to everyone automatically.
+function applyCmd(cmd){
+  if(!cmd||!cmd.name) return;
+  if(cmd.name==="like"){
+    const v=cmd.value; if(!v||v.id==null) return;
+    const t=tr(v.id); if(t) t.liked=!!v.liked;
+    const liked=!!v.liked;
+    const row=listEl.querySelector('.row[data-id="'+v.id+'"] .like');
+    if(row){ row.classList.toggle("on",liked); row.textContent=liked?"♥":"♡"; }
+    if(v.id===currentId()){
+      $("#npLike").classList.toggle("on",liked); $("#npLike").textContent=liked?"♥":"♡";
+      $("#barLike").classList.toggle("on",liked); $("#barLike").textContent=liked?"♥":"♡";
     }
+    return;
   }
-  try{ localStorage.setItem("role",role); }catch(e){}
-}
-function connectSync(){
-  const es=new EventSource("api/sync/events");
-  es.onmessage=e=>{
-    if(e.data==="connected"||e.data.startsWith(":")) return;
-    try{
-      const d=JSON.parse(e.data);
-      // Auto-switch to controller if another device is actively playing and user never set a role
-      if(!_autoRoleDone&&d.clientId!==CLIENT_ID&&d.playing){
-        _autoRoleDone=true; setRole("controller");
-        toast("Another device is playing — set to Control mode. Tap role in Now Playing to take audio.");
+  if(S.role!=="output") return; // only the output executes playback/setting commands
+  switch(cmd.name){
+    case "toggle": togglePlay(); break;
+    case "next": nextTrack(); break;
+    case "prev": prevTrack(); break;
+    case "seek": seekTo(cmd.value); break;
+    case "volume": setVolume(cmd.value); persist(); syncState(); break;
+    case "crossfade": setCrossfade(cmd.value); persist(); syncState(); break;
+    case "shuffle": setShuffle(!!cmd.value); break;
+    case "repeat": setRepeat(cmd.value); break;
+    case "sleep": setSleep(cmd.value); break;
+    case "playTrack":
+      if(cmd.value&&Array.isArray(cmd.value.queue)){
+        S.queue=cmd.value.queue; S.order=cmd.value.order||[...S.queue.keys()]; S.pos=cmd.value.pos||0;
+        if(typeof cmd.value.shuffle==="boolean"&&cmd.value.shuffle!==S.shuffle){ S.shuffle=cmd.value.shuffle; syncShuffleUI(); }
+        showPlayer(); transitionTo(currentId(),FADE); syncState();
       }
-      applySync(d);
-    }catch(ex){}
-  };
-  es.onerror=()=>{ es.close(); setTimeout(connectSync,4000); };
+      break;
+    case "queue":
+      if(cmd.value&&Array.isArray(cmd.value.queue)){
+        S.queue=cmd.value.queue; S.order=cmd.value.order||[...S.queue.keys()]; S.pos=cmd.value.pos||0;
+        renderQueue(); syncState();
+      }
+      break;
+  }
 }
-connectSync();
+
+function syncRoleUI(){
+  const rb=$("#roleBtn");
+  if(S.role==="output"){ rb.textContent="🔊 Output · this device"; rb.classList.remove("ctrl"); }
+  else if(S.role==="controller"){ rb.textContent="🎮 Control only"; rb.classList.add("ctrl"); }
+  else { rb.textContent="▶ Play here"; rb.classList.add("ctrl"); }
+}
+function claimOutput(){
+  try{ localStorage.setItem("rolePref","output"); }catch(e){}
+  fetch("api/sync/claim",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({cid:CLIENT_ID})}).catch(()=>{});
+}
+function releaseOutput(){
+  try{ localStorage.setItem("rolePref","controller"); }catch(e){}
+  fetch("api/sync/release",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({cid:CLIENT_ID})}).catch(()=>{});
+}
+// Called from both the initial 'hello' and every subsequent 'role' broadcast.
+// Only the transitions (becoming/losing output) trigger audio side effects;
+// otherwise this is just keeping the badge and S.role in sync with the server.
+function setRoleFromServer(output,peers){
+  const prevRole=S.role;
+  S.syncPeers=peers||0;
+  S.role = output===CLIENT_ID ? "output" : (output==null ? null : "controller");
+  syncRoleUI();
+  if(S.role==="output" && prevRole!=="output"){
+    ensureKeepAlive(); aud.forEach(a=>a.volume=S.volume);
+    const resume = (_lastState && _lastState.id!=null && S.byId.has(_lastState.id))
+      ? {id:_lastState.id, time:_lastState.time||0, playing:!!_lastState.playing}
+      : (S._resume && S.byId.has(S._resume.id) ? {id:S._resume.id, time:S._resume.time, playing:false} : null);
+    S._resume=null;
+    if(resume){
+      hardStop();
+      cur().src="api/stream/"+resume.id; cur().volume=S.volume;
+      if(resume.time>0.5) cur().addEventListener("loadedmetadata",function once(){
+        cur().currentTime=resume.time; cur().removeEventListener("loadedmetadata",once); drawTimes(); },{once:true});
+      S.playing=resume.playing; showPlayer();
+      if(S.playing){ const p=cur().play(); if(p&&p.catch)p.catch(()=>{}); }
+      updatePlay(); markPlayingRow(resume.id);
+    }
+    pushState();
+    if(_syncBooted) toast("You're now the output device");
+  } else if(S.role!=="output" && prevRole==="output"){
+    aud.forEach(a=>{ a._ft=(a._ft||0)+1; try{a.pause();}catch(e){} });
+    stopKeepAlive();
+    if(_syncBooted) toast("Switched to Control only");
+  } else if(S.role===null && prevRole!=null && _syncBooted){
+    toast("No output device — tap “Play here” to take over.");
+  }
+}
+
+let _es=null;
+function connectSync(){
+  const rolePref=localStorage.getItem("rolePref");
+  const want=rolePref==="controller"?"controller":"output";
+  if(_es){ try{_es.close();}catch(e){} }
+  _es=new EventSource("api/sync/events?cid="+encodeURIComponent(CLIENT_ID)+"&want="+want);
+  _es.onmessage=e=>{
+    if(e.data==="connected") return;
+    let msg; try{ msg=JSON.parse(e.data); }catch(ex){ return; }
+    if(msg.type==="hello"){ applyState(msg.state); setRoleFromServer(msg.output,msg.peers); _syncBooted=true; }
+    else if(msg.type==="role") setRoleFromServer(msg.output,msg.peers);
+    else if(msg.type==="state") applyState(msg.state);
+    else if(msg.type==="cmd") applyCmd(msg.cmd);
+  };
+  _es.onerror=()=>{ try{_es.close();}catch(e){} setTimeout(connectSync,4000); };
+}
+addEventListener("pagehide",()=>{
+  try{ navigator.sendBeacon("api/sync/leave", new Blob([JSON.stringify({cid:CLIENT_ID})],{type:"application/json"})); }catch(e){}
+});
+// self-correcting periodic republish while actually playing (output), and a
+// light local clock on controllers so their progress bar keeps moving between
+// the discrete state pushes rather than sitting frozen.
+setInterval(()=>{ if(S.role==="output"&&S.playing) pushState(); },3000);
+setInterval(()=>{
+  if(S.role!=="output"&&S.playing&&S._ctrlTime!=null&&S._ctrlTimeAt!=null&&!S._seeking){
+    S._ctrlTime+=(performance.now()-S._ctrlTimeAt)/1000;
+    S._ctrlTimeAt=performance.now();
+    drawTimes();
+  }
+},250);
 
 // ---- boot ----
-(async()=>{ await loadTracks(); await loadPlaylists(); restore(); })();
+// Load the library and restore local playback state first, then connect to
+// the sync channel — connecting too early would let a device apply synced
+// state (and possibly play audio) before it even knows what track ids exist.
+(async()=>{ await loadTracks(); await loadPlaylists(); restore(); connectSync(); })();
 })();
 </script>
 </body>

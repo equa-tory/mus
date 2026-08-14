@@ -143,9 +143,14 @@ SCAN = {"running": False, "scanned": 0, "total": 0, "added": 0,
 SCAN_LOCK = threading.Lock()
 
 # --- Cross-device sync ---
-_SYNC_CLIENTS: list[_queue.Queue] = []
+# One connected client ("output") owns audio playback; every other connected
+# client is a "controller" that mirrors state and sends intent (commands).
+# The server is the sole authority over who the output is, so a client can
+# never accidentally steal or duplicate audio just by opening the page.
 _SYNC_LOCK = threading.Lock()
-_SYNC_STATE: dict = {}
+_SYNC_CLIENTS: dict[str, _queue.Queue] = {}   # cid -> per-client event queue
+_SYNC_OUTPUT: str | None = None               # cid that currently owns audio
+_SYNC_STATE: dict = {}                        # last full state published by the output
 
 def _scan_worker():
     global SCAN
@@ -379,25 +384,36 @@ def remove_from_playlist(pid: int, tid: int):
         c.execute("DELETE FROM playlist_tracks WHERE playlist_id=? AND track_id=?", (pid, tid))
     return {"ok": True}
 
-@app.post("/api/sync")
-def sync_push(body: dict = Body(...)):
-    global _SYNC_STATE
-    _SYNC_STATE = dict(body)
+def _sync_send(msg: dict, exclude: str | None = None):
+    """Broadcast msg to every connected client except `exclude`, dropping dead queues."""
     with _SYNC_LOCK:
         dead = []
-        for cq in _SYNC_CLIENTS:
-            try: cq.put_nowait(_SYNC_STATE)
-            except _queue.Full: dead.append(cq)
-        for cq in dead: _SYNC_CLIENTS.remove(cq)
-    return {"ok": True}
+        for cid, cq in _SYNC_CLIENTS.items():
+            if cid == exclude:
+                continue
+            try: cq.put_nowait(msg)
+            except _queue.Full: dead.append(cid)
+        for cid in dead: _SYNC_CLIENTS.pop(cid, None)
+
+def _sync_roles():
+    with _SYNC_LOCK:
+        peers = len(_SYNC_CLIENTS)
+    _sync_send({"type": "role", "output": _SYNC_OUTPUT, "peers": peers})
 
 @app.get("/api/sync/events")
-def sync_events():
+def sync_events(cid: str, want: str = "controller"):
+    global _SYNC_OUTPUT
     cq: _queue.Queue = _queue.Queue(maxsize=50)
-    if _SYNC_STATE:
-        cq.put_nowait(_SYNC_STATE)
     with _SYNC_LOCK:
-        _SYNC_CLIENTS.append(cq)
+        _SYNC_CLIENTS[cid] = cq
+        claimed_output = False
+        if want == "output" and _SYNC_OUTPUT in (None, cid):
+            _SYNC_OUTPUT = cid
+            claimed_output = True
+        peers = len(_SYNC_CLIENTS)
+    cq.put_nowait({"type": "hello", "output": _SYNC_OUTPUT, "state": _SYNC_STATE, "peers": peers})
+    if claimed_output:
+        _sync_roles()
     def gen():
         try:
             yield "data: connected\n\n"
@@ -408,11 +424,79 @@ def sync_events():
                 except _queue.Empty:
                     yield ": ka\n\n"
         finally:
+            global _SYNC_OUTPUT
+            was_output = False
             with _SYNC_LOCK:
-                if cq in _SYNC_CLIENTS:
-                    _SYNC_CLIENTS.remove(cq)
+                _SYNC_CLIENTS.pop(cid, None)
+                if _SYNC_OUTPUT == cid:
+                    _SYNC_OUTPUT = None
+                    was_output = True
+            if was_output:
+                _sync_roles()
     return StreamingResponse(gen(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+@app.post("/api/sync/state")
+def sync_state(body: dict = Body(...)):
+    global _SYNC_STATE
+    cid = body.get("cid")
+    if cid != _SYNC_OUTPUT:
+        return {"ok": False, "output": _SYNC_OUTPUT}
+    state = body.get("state") or {}
+    _SYNC_STATE = dict(state)
+    _sync_send({"type": "state", "state": _SYNC_STATE}, exclude=cid)
+    return {"ok": True}
+
+_SETTINGS_CMDS = {"volume", "crossfade", "shuffle", "repeat", "sleep"}
+
+@app.post("/api/sync/cmd")
+def sync_cmd(body: dict = Body(...)):
+    global _SYNC_STATE
+    cid = body.get("cid")
+    cmd = body.get("cmd") or {}
+    name = cmd.get("name")
+    if name in _SETTINGS_CMDS and isinstance(cmd.get("value"), (int, float, bool, str, type(None), dict)):
+        _SYNC_STATE = {**_SYNC_STATE, name: cmd.get("value")}
+    _sync_send({"type": "cmd", "from": cid, "cmd": cmd}, exclude=cid)
+    return {"ok": True}
+
+@app.post("/api/sync/claim")
+def sync_claim(body: dict = Body(...)):
+    global _SYNC_OUTPUT
+    cid = body.get("cid")
+    with _SYNC_LOCK:
+        if cid not in _SYNC_CLIENTS:
+            return {"ok": False}
+        _SYNC_OUTPUT = cid
+    _sync_roles()
+    return {"ok": True, "output": _SYNC_OUTPUT}
+
+@app.post("/api/sync/release")
+def sync_release(body: dict = Body(...)):
+    global _SYNC_OUTPUT
+    cid = body.get("cid")
+    changed = False
+    with _SYNC_LOCK:
+        if _SYNC_OUTPUT == cid:
+            _SYNC_OUTPUT = None
+            changed = True
+    if changed:
+        _sync_roles()
+    return {"ok": True}
+
+@app.post("/api/sync/leave")
+def sync_leave(body: dict = Body(...)):
+    global _SYNC_OUTPUT
+    cid = body.get("cid")
+    changed = False
+    with _SYNC_LOCK:
+        _SYNC_CLIENTS.pop(cid, None)
+        if _SYNC_OUTPUT == cid:
+            _SYNC_OUTPUT = None
+            changed = True
+    if changed:
+        _sync_roles()
+    return {"ok": True}
 
 # Serve the single-page frontend (declared last so /api/* wins).
 app.mount("/", StaticFiles(directory=str(STATIC_DIR), html=True), name="static")
