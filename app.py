@@ -10,11 +10,14 @@ Then open http://<this-machine-ip>:8000 on phone / PC / TV.
 import os
 import time
 import json
+import struct
+import shutil
+import asyncio
 import sqlite3
 import threading
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Body
+from fastapi import FastAPI, HTTPException, Body, Request
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 import queue as _queue
@@ -248,6 +251,9 @@ def track_dict(r: sqlite3.Row):
         "hasArt": bool(r["has_art"]), "addedAt": r["added_at"],
         "playCount": r["play_count"], "liked": bool(r["liked"]),
         "lastPlayedAt": r["last_played_at"], "ext": r["ext"],
+        "broken": not r["size"],
+        # Apple Lossless: played via the live ffmpeg transcode (cached lookup, see _alac_info)
+        "alac": bool(r["size"]) and r["ext"] == ".m4a" and _alac_info(r["path"], r["mtime"]) is not None,
     }
 
 @app.get("/api/tracks")
@@ -256,13 +262,134 @@ def get_tracks():
         rows = c.execute("SELECT * FROM tracks ORDER BY album_artist, album, track_no, title")
         return [track_dict(r) for r in rows]
 
+# --- Live ALAC -> WAV transcode ---------------------------------------------
+# Browsers (Chrome/Firefox) can't decode Apple Lossless. We serve those files as
+# a *virtual* 16-bit PCM WAV: its exact length is known up front from the
+# metadata, so the browser sees an ordinary fixed-size, seekable file, while the
+# bytes are produced on the fly by ffmpeg (nothing is written to disk). A Range
+# request starting mid-file just starts ffmpeg at the matching sample offset.
+_ALAC_CACHE: dict = {}
+_HAS_FFMPEG = shutil.which("ffmpeg") is not None
+
+def _alac_info(path: str, mtime: float):
+    """(sample_rate, channels, nsamples) if `path` is ALAC, else None."""
+    key = (path, mtime)
+    if key in _ALAC_CACHE:
+        return _ALAC_CACHE[key]
+    info = None
+    try:
+        from mutagen.mp4 import MP4
+        i = MP4(path).info
+        if getattr(i, "codec", None) == "alac" and i.sample_rate and i.channels:
+            info = (int(i.sample_rate), int(i.channels), round(i.length * i.sample_rate))
+    except Exception:
+        pass
+    _ALAC_CACHE[key] = info
+    return info
+
+def _warm_alac_cache():
+    """Probe every m4a once in the background so the first /api/tracks isn't slow."""
+    try:
+        with db() as c:
+            rows = c.execute("SELECT path,mtime FROM tracks WHERE ext='.m4a' AND size>0").fetchall()
+        for r in rows:
+            _alac_info(r["path"], r["mtime"])
+    except Exception:
+        pass
+threading.Thread(target=_warm_alac_cache, daemon=True).start()
+
+def _wav_header(sr: int, ch: int, nbytes: int) -> bytes:
+    return (b"RIFF" + struct.pack("<I", 36 + nbytes) + b"WAVEfmt " +
+            struct.pack("<IHHIIHH", 16, 1, ch, sr, sr * ch * 2, ch * 2, 16) +
+            b"data" + struct.pack("<I", nbytes))
+
+async def _pcm_stream(path: str, sr: int, ch: int, total: int, start: int, end: int):
+    """Yield bytes [start, end] (inclusive) of the virtual WAV."""
+    remaining = end - start + 1
+    if start < 44:
+        hdr = _wav_header(sr, ch, total - 44)[start:end + 1]
+        yield hdr
+        remaining -= len(hdr)
+        start = 44
+    if remaining <= 0:
+        return
+    block = ch * 2
+    sample0, skip = divmod(start - 44, block)
+    proc = await asyncio.create_subprocess_exec(
+        "ffmpeg", "-v", "error", "-nostdin", "-ss", f"{sample0 / sr:.6f}", "-i", path,
+        "-map", "0:a:0", "-vn", "-f", "s16le", "-ar", str(sr), "-ac", str(ch), "pipe:1",
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+    try:
+        while remaining > 0:
+            chunk = await proc.stdout.read(65536)
+            if not chunk:
+                break
+            if skip:                       # land on the exact byte inside a sample frame
+                drop = min(skip, len(chunk)); chunk = chunk[drop:]; skip -= drop
+                if not chunk:
+                    continue
+            chunk = chunk[:remaining]
+            remaining -= len(chunk)
+            yield chunk
+        while remaining > 0:               # ffmpeg ended early: pad so Content-Length holds
+            n = min(remaining, 65536)
+            remaining -= n
+            yield bytes(n)
+    finally:
+        try:
+            proc.kill()
+        except ProcessLookupError:
+            pass
+        await proc.wait()
+
+def _parse_range(header: str | None, total: int):
+    """Return (start, end) inclusive, None for no/invalid-format header, or False if unsatisfiable."""
+    if not header or not header.startswith("bytes=") or "," in header:
+        return None
+    a, _, b = header[6:].strip().partition("-")
+    try:
+        if a == "":
+            n = int(b)
+            if n <= 0:
+                return False
+            start, end = max(0, total - n), total - 1
+        else:
+            start = int(a)
+            end = int(b) if b else total - 1
+    except ValueError:
+        return None
+    end = min(end, total - 1)
+    if start > end or start >= total:
+        return False
+    return start, end
+
 @app.get("/api/stream/{track_id}")
-def stream(track_id: int):
+async def stream(track_id: int, request: Request):
     with db() as c:
-        r = c.execute("SELECT path,ext FROM tracks WHERE id=?", (track_id,)).fetchone()
+        r = c.execute("SELECT path,ext,mtime FROM tracks WHERE id=?", (track_id,)).fetchone()
     if not r or not Path(r["path"]).exists():
         raise HTTPException(404, "Track not found")
-    return FileResponse(r["path"], media_type=MIME.get(r["ext"], "application/octet-stream"))
+    path = r["path"]
+    if os.path.getsize(path) == 0:
+        raise HTTPException(422, "Empty file")
+    if r["ext"] == ".m4a" and _HAS_FFMPEG:
+        info = await asyncio.to_thread(_alac_info, path, r["mtime"])
+        if info:
+            sr, ch, nsamples = info
+            total = 44 + nsamples * ch * 2
+            rng = _parse_range(request.headers.get("range"), total)
+            headers = {"Accept-Ranges": "bytes", "Cache-Control": "no-cache"}
+            if rng is False:
+                return Response(status_code=416, headers={**headers, "Content-Range": f"bytes */{total}"})
+            if rng is None:
+                start, end, status = 0, total - 1, 200
+            else:
+                (start, end), status = rng, 206
+                headers["Content-Range"] = f"bytes {start}-{end}/{total}"
+            headers["Content-Length"] = str(end - start + 1)
+            return StreamingResponse(_pcm_stream(path, sr, ch, total, start, end),
+                                     status_code=status, media_type="audio/wav", headers=headers)
+    return FileResponse(path, media_type=MIME.get(r["ext"], "application/octet-stream"))
 
 @app.get("/api/art/{track_id}")
 def art(track_id: int):

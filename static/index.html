@@ -17,7 +17,7 @@
     --bg:#15120e; --bg2:#1d1813; --bg3:#262019; --line:#2e2820;
     --text:#efe7d8; --muted:#9b8e7a; --muted2:#6f6557;
     --accent:#e0a85b; --accent-dim:#b9863f;
-    --bar-h:64px; --safe:env(safe-area-inset-bottom,0px);
+    --bar-h:64px; --safe:env(safe-area-inset-bottom,0px); --side-w:420px;
     --ease:cubic-bezier(.22,.61,.36,1);
   }
   *{box-sizing:border-box}
@@ -75,6 +75,11 @@
   .row .t{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .row .s{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--muted);font-size:13px;margin-top:1px}
   .row.playing .t{color:var(--accent)}
+  .row.broken,.qitem.broken{opacity:.42}
+  /* lossless-ALAC marker: these play through the server's live ffmpeg transcode */
+  .tag{display:inline-block;margin-left:7px;padding:0 5px;border:1px solid var(--accent-dim);border-radius:4px;
+    color:var(--accent);font-size:9.5px;font-weight:600;letter-spacing:.5px;line-height:15px;vertical-align:middle;
+    font-variant-numeric:normal;-webkit-text-fill-color:currentColor}
   .row .like{font-size:15px;color:var(--muted2);width:26px;text-align:center;opacity:0;transition:opacity .15s}
   .row:hover .like,.row .like.on{opacity:1}
   .row .like.on{color:var(--accent)}
@@ -282,23 +287,87 @@
   #barQueue,#barMore{font-size:17px;color:var(--muted2);width:32px;height:40px;display:grid;place-items:center;border-radius:8px;flex:none}
   #barQueue:hover,#barMore:hover{color:var(--text);background:var(--bg3)}
   @media(max-width:640px){
-    #barQueue{display:none}
+    #barQueue,#barAdd,#barSleep,#barRole{display:none}
     #barShuffle,#barRepeat{display:none}
     #bar{grid-template-columns:minmax(0,1fr) auto}
   }
 
   /* ---- bar queue popover ---- */
-  #queuePop{position:absolute;right:8px;bottom:calc(var(--bar-h) + var(--safe) + 16px);width:340px;
+  #queuePop,#sleepPop{position:absolute;right:8px;bottom:calc(var(--bar-h) + var(--safe) + 16px);width:340px;
     max-height:min(60vh,420px);background:var(--bg2);border:1px solid var(--line);border-radius:14px;
-    box-shadow:0 16px 44px rgba(0,0,0,.55);display:none;flex-direction:column;z-index:31}
-  #queuePop.open{display:flex}
-  #queuePop .phead{display:flex;align-items:center;justify-content:space-between;padding:14px 16px 8px}
-  #queuePop .phead b{font-size:15px}
-  #queuePop .phead button{color:var(--muted);font-size:14px}
-  #queuePop .pbody{overflow-y:auto;padding:0 8px 10px}
-  @media(max-width:640px){#queuePop{left:8px;right:8px;width:auto}}
+    box-shadow:0 16px 44px rgba(0,0,0,.55);display:none;flex-direction:column;z-index:45}
+  #sleepPop{width:260px}
+  #queuePop.open,#sleepPop.open{display:flex}
+  #queuePop .phead,#sleepPop .phead{display:flex;align-items:center;justify-content:space-between;padding:14px 16px 8px}
+  #queuePop .phead b,#sleepPop .phead b{font-size:15px}
+  #queuePop .phead button,#sleepPop .phead button{color:var(--muted);font-size:14px}
+  #queuePop .pbody,#sleepPop .pbody{overflow-y:auto;padding:0 8px 10px}
+  @media(max-width:640px){#queuePop{left:8px;right:8px;width:auto}#sleepPop{display:none!important}}
   #roleBtn{width:100%;margin-top:8px;text-align:center;font-size:13px}
   #roleBtn.ctrl{border-color:var(--accent-dim);color:var(--accent)}
+
+  /* ---- mini-bar: centre stack (controls over seek slider), extra buttons ---- */
+  .bar-mid{display:flex;flex-direction:column;align-items:center;min-width:0}
+  .bar-seek{display:none;align-items:center;gap:10px;width:100%}
+  .bar-seek input{flex:1;min-width:0}
+  .bar-seek .t{font-size:11.5px;color:var(--muted);min-width:36px;font-variant-numeric:tabular-nums}
+  .bar-seek .t:first-child{text-align:right}
+  #barAdd,#barSleep,#barRole{font-size:17px;color:var(--muted2);width:32px;height:40px;display:grid;place-items:center;border-radius:8px;flex:none}
+  #barAdd{font-size:21px;line-height:1}
+  #barRole{font-size:15px}
+  #barAdd:hover,#barSleep:hover,#barRole:hover{color:var(--text);background:var(--bg3)}
+  #barSleep.on,#barRole.on{color:var(--accent)}
+  #barSleep svg{width:18px;height:18px}
+  @media(min-width:641px){
+    :root{--bar-h:80px}
+    #bar{grid-template-columns:minmax(0,1fr) minmax(0,50%) minmax(0,1fr)}
+    #bar .progress{display:none}
+    .bar-seek{display:flex}
+    #bar .ctrl button{width:36px;height:36px}
+    #barArt{width:56px;height:56px}
+    #barAdd,#barSleep,#barRole,#barQueue,#barMore,#barLike{width:30px}
+    input.bar-vol{display:none}
+  }
+  @media(min-width:1200px){
+    #bar{grid-template-columns:minmax(0,1fr) minmax(0,56%) minmax(0,1fr)}
+    input.bar-vol{display:block;width:64px}
+  }
+  @media(min-width:1500px){ #bar{grid-template-columns:minmax(0,1fr) minmax(0,62%) minmax(0,1fr)} }
+
+  /* ---- queue labels / history rows (side-panel queue) ---- */
+  .qlabel{padding:12px 12px 4px;font-size:11px;letter-spacing:.5px;text-transform:uppercase;color:var(--muted2)}
+  .qitem.hist{opacity:.55}
+  .qitem.hist:hover{opacity:1}
+
+  /* ---- desktop side-panel mode (toggle in the sheet header; hover:hover = mouse devices only) ---- */
+  #dockBtn,#sideGrip,#sideQueue{display:none}
+  .sheet-top .rt{display:flex;align-items:center}
+  @media(min-width:900px) and (hover:hover){
+    #dockBtn{display:grid}
+    #dockBtn.on{color:var(--accent)}
+    body.side-mode #sheet{inset:0 0 calc(var(--bar-h) + var(--safe) + 16px) auto;width:var(--side-w);
+      transform:translateX(100%);border-left:1px solid var(--line)}
+    body.side-mode #sheet.open{transform:translateX(0);box-shadow:-18px 0 40px rgba(0,0,0,.35)}
+    body.side-mode #sideGrip{display:block;position:absolute;left:0;top:0;bottom:0;width:8px;z-index:6;cursor:ew-resize}
+    body.side-mode #sideGrip:hover,body.side-resizing #sideGrip{background:linear-gradient(90deg,var(--accent-dim),transparent)}
+    body.side-resizing{user-select:none;-webkit-user-select:none;cursor:ew-resize}
+    body.side-resizing #sheet,body.side-resizing main,body.side-resizing header,body.side-resizing nav{transition:none!important}
+    /* side panel = art + title/artist + one history/queue list; transport, seek, volume, crossfade,
+       sleep and the slide-up queue/sleep panels all live elsewhere (mini bar) or are fullscreen-only */
+    body.side-mode .sheet-handle,body.side-mode .sheet-top .label,body.side-mode #npLike,
+    body.side-mode .seek,body.side-mode .transport,body.side-mode .vol,body.side-mode .xfade,
+    body.side-mode .actions,body.side-mode #roleBtn,body.side-mode .panel{display:none}
+    body.side-mode #collapse{transform:rotate(-90deg)}
+    body.side-mode #sheet .inner{max-width:none;padding:14px 22px 10px;overflow:hidden}
+    body.side-mode #sheetArtWrap{flex:none;padding:8px 0}
+    body.side-mode #sheetArt{width:min(100%,max(150px,calc(100vh - 440px)))}
+    body.side-mode #sideQueue{display:block;flex:1;min-height:160px;overflow-y:auto;position:relative;
+      margin:8px -12px 0;padding:0 6px;border-top:1px solid var(--line);overscroll-behavior:contain}
+    main,header,nav{transition:right .38s var(--ease),margin-right .38s var(--ease)}
+    body.side-mode.side-open main{right:var(--side-w)}
+    body.side-mode.side-open header,body.side-mode.side-open nav{margin-right:var(--side-w)}
+    body.side-open #barQueue{display:none}
+  }
 </style>
 </head>
 <body>
@@ -316,15 +385,25 @@
         <img id="barArt" alt="">
         <div id="barMeta"><div id="barTitle"></div><div id="barArtist"></div></div>
       </div>
-      <div class="ctrl">
-        <button id="barShuffle" title="Shuffle">⤮</button>
-        <button id="barPrev" title="Previous">⏮</button>
-        <button id="barPlay" title="Play">▶</button>
-        <button id="barNext" title="Next">⏭</button>
-        <button id="barRepeat" title="Repeat">↻</button>
+      <div class="bar-mid">
+        <div class="ctrl">
+          <button id="barShuffle" title="Shuffle">⤮</button>
+          <button id="barPrev" title="Previous">⏮</button>
+          <button id="barPlay" title="Play">▶</button>
+          <button id="barNext" title="Next">⏭</button>
+          <button id="barRepeat" title="Repeat">↻</button>
+        </div>
+        <div class="bar-seek">
+          <span class="t" id="barCur">0:00</span>
+          <input id="barSeek" type="range" min="0" max="1000" value="0" aria-label="Seek">
+          <span class="t" id="barDur">0:00</span>
+        </div>
       </div>
       <div id="barRight">
         <button id="barLike" title="Like">♡</button>
+        <button id="barAdd" title="Add to playlist">+</button>
+        <button id="barSleep" title="Sleep timer"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="10.5" r="7"/><path d="M10 6.5v4l2.6 1.6M7.5 2h5"/></svg></button>
+        <button id="barRole" title="Output">🔊</button>
         <input id="barVol" class="bar-vol" type="range" min="0" max="100" value="90">
         <button id="barQueue" title="Queue">☰</button>
         <button id="barMore" title="More">⋯</button>
@@ -335,16 +414,24 @@
       <div class="phead"><b>Queue</b><button id="closeQueuePop">Done</button></div>
       <div class="pbody" id="queuePopBody"></div>
     </div>
+    <div id="sleepPop">
+      <div class="phead"><b>Sleep timer</b><button id="closeSleepPop">Done</button></div>
+      <div class="pbody" id="sleepPopBody"></div>
+    </div>
 
     <div id="sheet">
       <img id="sheetBg" alt="">
       <div class="veil"></div>
+      <div id="sideGrip" title="Drag to resize"></div>
       <div class="inner">
         <div class="sheet-handle"></div>
         <div class="sheet-top">
           <button id="collapse" title="Close">⌄</button>
           <span class="label" id="sheetLabel">Now playing</span>
-          <button id="npLike" title="Like">♡</button>
+          <div class="rt">
+            <button id="dockBtn" title="Dock to side panel"><svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><rect x="2.5" y="3.5" width="15" height="13" rx="2"/><path d="M12 3.5v13"/></svg></button>
+            <button id="npLike" title="Like">♡</button>
+          </div>
         </div>
         <div id="sheetArtWrap"><img id="sheetArt" alt=""></div>
         <div class="np-meta">
@@ -375,6 +462,7 @@
           <button class="btn" id="openSleep">Sleep timer</button>
         </div>
         <button class="btn" id="roleBtn">🔊 Output</button>
+        <div id="sideQueue"></div>
 
         <div class="panel" id="queuePanel">
           <div class="phead"><b>Queue</b><button id="closeQueue">Done</button></div>
@@ -404,7 +492,7 @@ const S = {
   queue:[], order:[], pos:0, shuffle:false, repeat:"off",
   volume:0.9, crossfade:4, playing:false,
   sleep:null, _xfading:false, _counted:false, _seeking:false, role:null, _ctrlTime:null, _ctrlTimeAt:null,
-  playlists:[], syncPeers:0,
+  playlists:[], syncPeers:0, hist:[],
 };
 const TABS = [["library","Library"],["recent","Recently added"],["liked","Liked"],
               ["most","Most played"],["history","History"],["playlists","Playlists"]];
@@ -423,7 +511,30 @@ aud.forEach(a => { a.preload="auto"; a.volume=S.volume;
   a.addEventListener("timeupdate", onTime);
   a.addEventListener("ended", onEnded);
   a.addEventListener("loadedmetadata", e=>{ if(e.target===cur()) drawTimes(); });
+  a.addEventListener("error", onAudioError);
+  a.addEventListener("playing", ()=>{ if(a!==cur()) return; _errRun=0;
+    const t=tr(currentId()); if(t&&t.failed){ t.failed=false; markFailed(t.id); } });
 });
+// A track that can't be decoded / is empty / 404s used to leave the player
+// "playing" at 0:00 forever (no `ended`, no error handling). Skip it instead,
+// giving up after 5 in a row so an all-unplayable queue can't spin.
+let _errRun=0;
+function onAudioError(e){
+  const a=e.target;
+  if(a!==cur()||S.role!=="output"||!(a.getAttribute("src")||"").includes("api/stream/")) return;
+  if(a.error&&a.error.code===1) return; // MEDIA_ERR_ABORTED: we swapped src ourselves
+  const id=currentId(), t=id!=null?tr(id):null;
+  if(t){ t.failed=true; markFailed(id); }
+  toast("Can’t play “"+(t?t.title:"this track")+"” — skipping");
+  if(!S.playing) return; // e.g. resumed-on-load track: flag it, but don't start playing something else
+  if(++_errRun>=5){ _errRun=0; stopPlay(); return; }
+  const nid=peekNext(); nid==null ? stopPlay() : transitionTo(nid,0);
+}
+function markFailed(id){
+  const t=tr(id), bad=!!(t&&(t.broken||t.failed));
+  document.querySelectorAll('.row[data-id="'+id+'"]').forEach(r=>r.classList.toggle("broken",bad));
+  renderQueue();
+}
 
 // unlock both elements on the first user gesture (so the 2nd one can autoplay later)
 // We use a throw-away Audio element for the gesture; autoplay permission is per
@@ -499,6 +610,11 @@ function crossfade(out,inn,dur,done){
 
 // ---- data ----
 const tr = id => S.byId.get(id);
+// set a title element's text, plus the little ALAC tag for tracks served via live transcode
+function setTitle(e,t){
+  e.textContent=t.title;
+  if(t.alac){ const g=el("span","tag"); g.textContent="ALAC"; g.title="Apple Lossless — live-transcoded"; e.appendChild(g); }
+}
 async function loadTracks(){
   const r = await fetch("api/tracks"); const arr = await r.json();
   S.byId.clear(); arr.forEach(t=>S.byId.set(t.id,t));
@@ -629,23 +745,27 @@ function render(){
   ids.forEach((id,i)=>{
     const t=tr(id); const row=el("div","row"); row.dataset.id=id; row.dataset.idx=i;
     if(id===curId) row.classList.add("playing");
+    if(t.broken||t.failed) row.classList.add("broken");
     const art=el("div","art");
     if(t.hasArt){ const im=el("img"); im.loading="lazy"; im.src="api/art/"+id;
       im.onerror=()=>im.remove(); art.appendChild(im); }
     const ph=el("span","ph"); ph.textContent="♪"; art.appendChild(ph);
     const meta=el("div","meta");
-    const tt=el("div","t"); tt.textContent=t.title;
+    const tt=el("div","t"); setTitle(tt,t);
     const ss=el("div","s"); ss.textContent=t.artist+(t.album?" · "+t.album:"");
     meta.append(tt,ss);
     const like=el("button","like"+(t.liked?" on":"")); like.textContent=t.liked?"♥":"♡";
     like.onclick=e=>{ e.stopPropagation(); toggleLike(id); };
     const end=el("div","end");
     if(id===curId && S.playing) end.innerHTML='<span class="eq"><i></i><i></i><i></i></span>';
-    else end.textContent = S.view==="most" && t.playCount ? t.playCount+"×" : fmt(t.duration);
+    else end.textContent = t.broken ? "✕" : S.view==="most" && t.playCount ? t.playCount+"×" : fmt(t.duration);
+    if(t.broken) end.title="Empty file — re-download it";
     const more=el("button","more"); more.textContent="⋯";
     more.onclick=e=>{ e.stopPropagation(); openMenu(e.currentTarget, id); };
     row.append(art,meta,like,end,more);
-    row.onclick=()=>playFrom(ids,i);
+    row.onclick=()=>{
+      if(t.broken){ toast("“"+t.title+"” is an empty file — re-download it"); return; }
+      playFrom(ids,i); };
     frag.appendChild(row);
   });
   listEl.appendChild(frag);
@@ -729,14 +849,14 @@ function transitionTo(id, dur){
 function onTrackChanged(id){
   const t=tr(id); if(!t) return;
   const artUrl = t.hasArt ? "api/art/"+id : "";
-  $("#barTitle").textContent=t.title; $("#barArtist").textContent=t.artist;
-  $("#npTitle").textContent=t.title; $("#npArtist").textContent=t.artist+(t.album?" · "+t.album:"");
+  setTitle($("#barTitle"),t); $("#barArtist").textContent=t.artist;
+  setTitle($("#npTitle"),t); $("#npArtist").textContent=t.artist+(t.album?" · "+t.album:"");
   setArt($("#barArt"),artUrl); setArt($("#sheetArt"),artUrl); setArt($("#sheetBg"),artUrl);
   const liked=!!t.liked;
   $("#npLike").textContent=liked?"♥":"♡"; $("#npLike").classList.toggle("on",liked);
   $("#barLike").textContent=liked?"♥":"♡"; $("#barLike").classList.toggle("on",liked);
   if(S.role!=="output") S._ctrlTime=null;
-  drawTimes(); updatePlay(); markPlayingRow(id); renderQueue(); persist(); syncState();
+  drawTimes(); updatePlay(); markPlayingRow(id); renderQueue(true); refreshSideHistory(); persist(); syncState();
   // media session for lock-screen / TV controls
   if("mediaSession" in navigator){
     navigator.mediaSession.metadata=new MediaMetadata({title:t.title,artist:t.artist,album:t.album,
@@ -803,7 +923,7 @@ function onEnded(e){
 }
 function countPlay(){
   S._counted=true; const id=currentId(); if(id==null) return;
-  fetch("api/play/"+id,{method:"POST"}).catch(()=>{});
+  fetch("api/play/"+id,{method:"POST"}).then(refreshSideHistory).catch(()=>{});
   const t=tr(id); if(t){ t.playCount=(t.playCount||0)+1; t.lastPlayedAt=Date.now()/1000;
     if(S.view==="most"||S.view==="history") {/* refresh later */} }
 }
@@ -814,8 +934,9 @@ function drawTimes(){
   const dur=isFinite(a.duration)&&a.duration?a.duration:(t?t.duration:0);
   const ct=S.role!=="output"&&S._ctrlTime!=null?S._ctrlTime:a.currentTime;
   const frac=dur?ct/dur:0;
-  if(!S._seeking){ const sk=$("#seek"); sk.value=Math.round(frac*1000); sk.style.setProperty("--fill",(frac*100)+"%"); }
-  $("#tCur").textContent=fmt(ct); $("#tDur").textContent=fmt(dur);
+  if(!S._seeking) [$("#seek"),$("#barSeek")].forEach(sk=>{ sk.value=Math.round(frac*1000); sk.style.setProperty("--fill",(frac*100)+"%"); });
+  $("#tCur").textContent=$("#barCur").textContent=fmt(ct);
+  $("#tDur").textContent=$("#barDur").textContent=fmt(dur);
   $("#barFill").style.width=(frac*100)+"%";
 }
 function updatePlay(){
@@ -853,9 +974,55 @@ async function toggleLike(id){
 }
 
 // ---- expand / collapse sheet ----
-function expand(){ closeQueuePop(); $("#sheet").classList.add("open"); }
-function collapse(){ $("#sheet").classList.remove("open"); closePanels(); }
-$("#bar").addEventListener("click",e=>{ if(!e.target.closest(".ctrl")&&!["barLike","barVol","barQueue","barMore","barShuffle","barRepeat"].includes(e.target.id)) expand(); });
+// Desktop side-panel mode: the sheet docks to the right (resizable, width remembered)
+// instead of covering the screen. Only ever active on wide, mouse-driven screens.
+const sideMql=matchMedia("(min-width:900px) and (hover:hover)");
+const sheetEl=$("#sheet");
+const sheetOpen=()=>sheetEl.classList.contains("open");
+const sideActive=()=>document.body.classList.contains("side-mode")&&sideMql.matches;
+function expand(){
+  closeQueuePop(); closeSleepPop(); closeMenu(); sheetEl.classList.add("open");
+  document.body.classList.toggle("side-open",sideActive());
+  if(sideActive()){ renderQueue(true); loadSideHistory().then(()=>fillSideQueue(false)); }
+}
+function collapse(){ sheetEl.classList.remove("open"); document.body.classList.remove("side-open"); closePanels(); }
+// the bar is the tap target that opens the player; its own controls never do
+$("#bar").addEventListener("click",e=>{
+  if(e.target.closest(".ctrl,.bar-seek,#barRight")) return;
+  if(sideActive()&&sheetOpen()) collapse(); else expand();
+});
+sideMql.addEventListener("change",()=>{
+  if(sheetOpen()){ document.body.classList.toggle("side-open",sideActive()); if(sideActive()) renderQueue(true); }
+});
+let sideWPref=420;
+function applySideW(){
+  const w=Math.round(Math.max(340,Math.min(Math.min(900,innerWidth*0.7),sideWPref)));
+  document.documentElement.style.setProperty("--side-w",w+"px");
+}
+addEventListener("resize",applySideW);
+function updateDockUI(){
+  const on=document.body.classList.contains("side-mode"), b=$("#dockBtn");
+  b.classList.toggle("on",on); b.title=on?"Full screen":"Dock to side panel";
+}
+$("#dockBtn").onclick=()=>{
+  document.body.classList.toggle("side-mode");
+  try{ localStorage.setItem("sheetMode",document.body.classList.contains("side-mode")?"side":"full"); }catch(e){}
+  updateDockUI();
+  if(sheetOpen()){ document.body.classList.toggle("side-open",sideActive()); if(sideActive()){ renderQueue(true); loadSideHistory().then(()=>fillSideQueue(false)); } }
+};
+{ const g=$("#sideGrip"); let dragging=false;
+  g.addEventListener("pointerdown",e=>{ dragging=true; g.setPointerCapture(e.pointerId);
+    document.body.classList.add("side-resizing"); e.preventDefault(); });
+  g.addEventListener("pointermove",e=>{ if(!dragging) return; sideWPref=innerWidth-e.clientX; applySideW(); });
+  const end=()=>{ if(!dragging) return; dragging=false; document.body.classList.remove("side-resizing");
+    try{ localStorage.setItem("sideW",String(Math.round(sideWPref))); }catch(e){} };
+  g.addEventListener("pointerup",end); g.addEventListener("pointercancel",end);
+}
+try{
+  if(localStorage.getItem("sheetMode")==="side") document.body.classList.add("side-mode");
+  const w=+localStorage.getItem("sideW"); if(w>0) sideWPref=w;
+}catch(e){}
+applySideW(); updateDockUI();
 $("#collapse").onclick=collapse;
 $("#barPlay").onclick=e=>{e.stopPropagation();togglePlay();};
 $("#barNext").onclick=e=>{e.stopPropagation();nextTrack();};
@@ -864,12 +1031,16 @@ $("#npPlay").onclick=togglePlay; $("#next").onclick=nextTrack; $("#prev").onclic
 $("#npLike").onclick=()=>{ const id=currentId(); if(id!=null) toggleLike(id); };
 $("#barLike").onclick=e=>{ e.stopPropagation(); const id=currentId(); if(id!=null) toggleLike(id); };
 function closeQueuePop(){ $("#queuePop").classList.remove("open"); }
-$("#barQueue").onclick=e=>{ e.stopPropagation(); renderQueue(); $("#queuePop").classList.toggle("open"); };
+function closeSleepPop(){ $("#sleepPop").classList.remove("open"); }
+$("#barQueue").onclick=e=>{ e.stopPropagation(); closeSleepPop(); closeMenu(); renderQueue(); $("#queuePop").classList.toggle("open"); };
 $("#closeQueuePop").onclick=closeQueuePop;
+$("#barSleep").onclick=e=>{ e.stopPropagation(); closeQueuePop(); closeMenu(); renderSleep(); $("#sleepPop").classList.toggle("open"); };
+$("#closeSleepPop").onclick=closeSleepPop;
+$("#barRole").onclick=e=>{ e.stopPropagation(); S.role==="output" ? releaseOutput() : claimOutput(); };
+$("#barAdd").onclick=e=>{ e.stopPropagation(); const id=currentId(); if(id!=null) playlistPicker(e.currentTarget,id); };
 document.addEventListener("click",e=>{
-  if(!$("#queuePop").classList.contains("open")) return;
-  if(e.target.closest("#queuePop")||e.target.id==="barQueue") return;
-  closeQueuePop();
+  if(!e.target.closest("#queuePop")&&e.target.id!=="barQueue") closeQueuePop();
+  if(!e.target.closest("#sleepPop")&&!e.target.closest("#barSleep")) closeSleepPop();
 });
 $("#barMore").onclick=e=>{ e.stopPropagation(); const id=currentId(); if(id!=null) openMenu(e.currentTarget,id); };
 $("#roleBtn").onclick=()=>{ S.role==="output" ? releaseOutput() : claimOutput(); };
@@ -881,7 +1052,7 @@ $(".brand").onclick=()=>{ S.view="library"; S.openPlaylist=null; S.search=""; $(
 { let sy=null,sx=null;
   const sh=$("#sheet");
   sh.addEventListener("touchstart",e=>{
-    if(e.target.closest(".panel")||e.target.closest("input")) return;
+    if(sideActive()||e.target.closest(".panel")||e.target.closest("input")) return;
     sy=e.touches[0].clientY; sx=e.touches[0].clientX;
   },{passive:true});
   sh.addEventListener("touchmove",e=>{
@@ -953,14 +1124,18 @@ function sendCmdSoon(name,value,ms=150){
   clearTimeout(_cmdT[name]);
   _cmdT[name]=setTimeout(()=>sendCmd({name,value}),ms);
 }
-const seek=$("#seek");
-seek.addEventListener("input",()=>{ S._seeking=true; seek.style.setProperty("--fill",(seek.value/10)+"%");
-  const a=cur(),dur=a.duration||tr(currentId())?.duration||0; $("#tCur").textContent=fmt(dur*seek.value/1000); });
-seek.addEventListener("change",()=>{
-  const dur=(S.role==="output"?cur().duration:0)||tr(currentId())?.duration||0;
-  const time=dur*seek.value/1000; S._seeking=false;
-  seekTo(time);
-});
+// the sheet's slider and the mini-bar's slider behave identically
+function bindSeek(sk){
+  sk.addEventListener("input",()=>{ S._seeking=true; sk.style.setProperty("--fill",(sk.value/10)+"%");
+    const a=cur(),dur=a.duration||tr(currentId())?.duration||0;
+    $("#tCur").textContent=$("#barCur").textContent=fmt(dur*sk.value/1000); });
+  sk.addEventListener("change",()=>{
+    const dur=(S.role==="output"?cur().duration:0)||tr(currentId())?.duration||0;
+    const time=dur*sk.value/1000; S._seeking=false;
+    seekTo(time);
+  });
+}
+bindSeek($("#seek")); bindSeek($("#barSeek"));
 // seekTo is the "apply this exact time" primitive, reused by the local seek bar
 // (output) and by applyCmd (output executing a remote seek from a controller).
 function seekTo(time){
@@ -1005,44 +1180,86 @@ $("#openQueue").onclick=()=>{ renderQueue(); openPanel($("#queuePanel")); };
 $("#closeQueue").onclick=closePanels;
 $("#openSleep").onclick=()=>{ renderSleep(); openPanel($("#sleepPanel")); };
 $("#closeSleep").onclick=closePanels;
-function fillQueue(body){
+function qItem(id,cls,xText){
+  const t=tr(id); if(!t) return null;
+  const it=el("div","qitem"+cls+(t.broken||t.failed?" broken":""));
+  const art=el("div","qart");
+  if(t.hasArt){ const im=el("img"); im.loading="lazy"; im.src="api/art/"+id;
+    im.onerror=()=>im.remove(); art.appendChild(im); }
+  const ph=el("span","ph"); ph.textContent="♪"; art.appendChild(ph);
+  const m=el("div","qmeta");
+  m.innerHTML='<div class="qt"><span></span></div><div class="qs"><span></span></div>';
+  setTitle(m.querySelector(".qt>span"),t);
+  m.querySelector(".qs>span").textContent=t.artist;
+  const x=el("button","qx"); x.textContent=xText;
+  it.append(art,m,x);
+  it.addEventListener("mouseenter",()=>{
+    [m.querySelector(".qt"),m.querySelector(".qs")].forEach(line=>{
+      const sp=line.firstChild, over=sp.scrollWidth-line.clientWidth;
+      line.style.setProperty("--mq", over>0 ? (-(over+6))+"px" : "0px");
+      sp.style.transitionDuration=Math.max(2,Math.abs(over)/40)+"s";
+    });
+  });
+  return {it,x};
+}
+const qLabel=txt=>{ const d=el("div","qlabel"); d.textContent=txt; return d; };
+// withHistory (side panel only): recently played tracks above, then now-playing, then up-next
+function fillQueue(body,withHistory){
   body.innerHTML="";
+  if(withHistory&&S.hist.length){
+    body.appendChild(qLabel("History"));
+    S.hist.forEach(id=>{ const r=qItem(id," hist","↺"); if(!r) return;
+      r.it.onclick=()=>playNow(id); body.appendChild(r.it); });
+  }
   for(let i=S.pos;i<S.order.length;i++){
-    const id=S.queue[S.order[i]], t=tr(id); if(!t) continue;
-    const it=el("div","qitem"+(i===S.pos?" cur":""));
-    const art=el("div","qart");
-    if(t.hasArt){ const im=el("img"); im.loading="lazy"; im.src="api/art/"+id;
-      im.onerror=()=>im.remove(); art.appendChild(im); }
-    const ph=el("span","ph"); ph.textContent="♪"; art.appendChild(ph);
-    const m=el("div","qmeta");
-    m.innerHTML='<div class="qt"><span></span></div><div class="qs"><span></span></div>';
-    m.querySelector(".qt>span").textContent=t.title;
-    m.querySelector(".qs>span").textContent=t.artist;
-    const x=el("button","qx"); x.textContent=i===S.pos?"♪":"✕";
+    const id=S.queue[S.order[i]];
+    const r=qItem(id, i===S.pos?" cur":"", i===S.pos?"♪":"✕"); if(!r) continue;
+    const {it,x}=r;
+    if(withHistory&&i===S.pos) body.appendChild(qLabel("Now playing"));
+    if(withHistory&&i===S.pos+1) body.appendChild(qLabel("Up next"));
     if(i!==S.pos) x.onclick=()=>{ const realIdx=S.order[i]; S.order.splice(i,1);
       S.queue.splice(realIdx,1); S.order=S.order.map(v=>v>realIdx?v-1:v); renderQueue();
       if(S.role==="output") syncState(); else cmdQueue(); };
-    it.append(art,m,x);
     it.onclick=e=>{ if(e.target===x) return; S.pos=i; transitionTo(currentId(),FADE);
       if(S.role!=="output") cmdPlayTrack(); };
-    it.addEventListener("mouseenter",()=>{
-      [m.querySelector(".qt"),m.querySelector(".qs")].forEach(line=>{
-        const sp=line.firstChild, over=sp.scrollWidth-line.clientWidth;
-        line.style.setProperty("--mq", over>0 ? (-(over+6))+"px" : "0px");
-        sp.style.transitionDuration=Math.max(2,Math.abs(over)/40)+"s";
-      });
-    });
     body.appendChild(it);
   }
   if(!body.children.length){
     body.innerHTML='<div class="empty" style="min-height:120px"><p>Queue is empty.</p></div>'; }
 }
-function renderQueue(){ fillQueue($("#queueBody")); fillQueue($("#queuePopBody")); }
+function renderQueue(forceCur){ fillQueue($("#queueBody")); fillQueue($("#queuePopBody")); fillSideQueue(!!forceCur); }
+// Side-panel queue: re-renders keep the current track where it was on screen (history
+// loading in above it must not shift what you're looking at); forceCur scrolls it to the top.
+function fillSideQueue(forceCur){
+  if(!sideActive()||!sheetOpen()) return;
+  const body=$("#sideQueue"), keep=body.scrollTop;
+  const c0=body.querySelector(".qitem.cur"), rel=c0?c0.offsetTop-keep:null;
+  fillQueue(body,true);
+  const c1=body.querySelector(".qitem.cur");
+  if(forceCur&&c1) body.scrollTop=c1.offsetTop;
+  else if(rel!=null&&c1) body.scrollTop=c1.offsetTop-rel;
+  else body.scrollTop=keep;
+}
+async function loadSideHistory(){
+  try{
+    const arr=await (await fetch("api/history?limit=30")).json();
+    arr.forEach(t=>{ if(!S.byId.has(t.id)) S.byId.set(t.id,t); });
+    const ids=arr.map(t=>t.id);                    // newest first
+    if(ids.length&&ids[0]===currentId()) ids.shift(); // already counted as played: it's "now playing"
+    S.hist=ids.slice(0,25).reverse();
+  }catch(e){}
+}
+let _shT=null;
+function refreshSideHistory(){
+  if(!sideActive()||!sheetOpen()) return;
+  clearTimeout(_shT);
+  _shT=setTimeout(async()=>{ await loadSideHistory(); fillSideQueue(false); },400);
+}
 
 // ---- sleep timer ----
 let sleepTick=null;
-function renderSleep(){
-  const body=$("#sleepBody"); body.innerHTML="";
+function fillSleep(body){
+  body.innerHTML="";
   const opts=[["15 minutes",15],["30 minutes",30],["45 minutes",45],["1 hour",60],
               ["End of track","track"],["Off","off"]];
   opts.forEach(([label,val])=>{
@@ -1051,12 +1268,19 @@ function renderSleep(){
                    (typeof val==="number"&&S.sleep.mins===val));
     if(active) o.classList.add("on");
     o.innerHTML="<span>"+label+"</span>";
-    const r=el("span"); r.id="sleepRemain";
-    if(active && typeof val==="number") r.textContent=fmt((S.sleep.until-Date.now())/1000);
+    const r=el("span");
+    if(active && typeof val==="number"){ r.className="sleep-remain"; r.textContent=fmt((S.sleep.until-Date.now())/1000); }
     o.appendChild(r);
-    o.onclick=()=>{ if(S.role==="output") setSleep(val); else sendCmd({name:"sleep",value:val}); };
+    o.onclick=()=>{ closeSleepPop(); if(S.role==="output") setSleep(val); else sendCmd({name:"sleep",value:val}); };
     body.appendChild(o);
   });
+}
+function renderSleep(){ fillSleep($("#sleepBody")); fillSleep($("#sleepPopBody")); syncSleepBtn(); }
+function syncSleepBtn(){
+  const b=$("#barSleep"), s=S.sleep;
+  b.classList.toggle("on",!!s);
+  b.title = !s ? "Sleep timer" : s.endOfTrack ? "Sleep: end of track"
+          : "Sleep: "+fmt((s.until-Date.now())/1000)+" left";
 }
 // The sleep timer only ever runs on the output device (it's the one that can
 // actually pause audio); controllers just mirror S.sleep from synced state.
@@ -1067,15 +1291,16 @@ function setSleep(val){
   S.sleep={mins:val, until:Date.now()+val*60000};
   sleepTick=setInterval(()=>{
     const left=S.sleep.until-Date.now();
-    const r=$("#sleepRemain"); if(r) r.textContent=fmt(left/1000);
+    document.querySelectorAll(".sleep-remain").forEach(r=>r.textContent=fmt(left/1000)); syncSleepBtn();
     if(left<=0){ const a=cur(); fade(a,0,2,()=>a.pause()); S.playing=false; updatePlay(); clearSleep(); syncState(); toast("Paused — sleep timer"); }
   },1000);
   renderSleep(); syncState(); toast("Sleeping in "+val+" min");
 }
-function clearSleep(){ if(sleepTick) clearInterval(sleepTick); sleepTick=null; S.sleep=null; }
+function clearSleep(){ if(sleepTick) clearInterval(sleepTick); sleepTick=null; S.sleep=null; syncSleepBtn(); }
 // A controller-side cmd for sleep is handled entirely by the output; a controller
 // only ever *displays* S.sleep from synced state, so re-render if the panel is open.
-function displaySleep(sleep){ S.sleep=sleep||null; if($("#sleepPanel").classList.contains("open")) renderSleep(); }
+function displaySleep(sleep){ S.sleep=sleep||null; syncSleepBtn();
+  if($("#sleepPanel").classList.contains("open")||$("#sleepPop").classList.contains("open")) renderSleep(); }
 
 // ---- per-row context menu ----
 let scrim=null;
@@ -1089,14 +1314,43 @@ function openMenu(anchor, id){
   add("Add to queue",()=>addQueue(id));
   add(t.liked?"Unlike":"Like",()=>toggleLike(id));
   const sep=el("div","sep"); m.appendChild(sep);
-  const lbl=el("div","mlabel"); lbl.textContent="Add to playlist"; m.appendChild(lbl);
-  S.playlists.filter(p=>!p.isSmart).forEach(p=>add(p.name,()=>addToPlaylist(p.id,id)));
-  add("+ New playlist…",()=>newPlaylist(false,id));
+  playlistItems(m,id,add);
+  placeMenu(m,anchor);
+}
+function placeMenu(m,anchor){
   document.body.appendChild(m);
   const r=anchor.getBoundingClientRect();
   let top=r.bottom+6, left=Math.min(r.left, innerWidth-m.offsetWidth-10);
   if(top+m.offsetHeight>innerHeight-10) top=r.top-m.offsetHeight-6;
   m.style.top=Math.max(10,top)+"px"; m.style.left=Math.max(10,left)+"px";
+}
+// "Add to playlist" entries: a ✓ marks playlists that already hold the track, and
+// tapping one toggles membership (so the same menu both adds and removes).
+function playlistItems(m,id,add){
+  const lbl=el("div","mlabel"); lbl.textContent="Add to playlist"; m.appendChild(lbl);
+  S.playlists.filter(p=>!p.isSmart).forEach(p=>{
+    const has=(p.trackIds||[]).includes(id);
+    add((has?"✓ ":"")+p.name,()=>togglePlaylistTrack(p,id,has));
+  });
+  add("+ New playlist…",()=>newPlaylist(false,id));
+}
+async function togglePlaylistTrack(p,id,has){
+  if(has) await fetch("api/playlists/"+p.id+"/tracks/"+id,{method:"DELETE"});
+  else await fetch("api/playlists/"+p.id+"/tracks",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({trackId:id})});
+  await loadPlaylists();
+  toast(has?"Removed from “"+p.name+"”":"Added to “"+p.name+"”");
+  if(S.view==="playlist"&&S.openPlaylist&&S.openPlaylist.id===p.id){
+    S.openPlaylist=S.playlists.find(q=>q.id===p.id)||null; render(); }
+}
+// one-tap playlist picker for the mini bar's + button
+function playlistPicker(anchor,id){
+  closeMenu(); closeQueuePop(); closeSleepPop();
+  scrim=el("div","scrim"); scrim.onclick=closeMenu; document.body.appendChild(scrim);
+  const m=el("div","menu");
+  const add=(label,fn)=>{ const b=el("button"); b.textContent=label; b.onclick=()=>{fn();closeMenu();}; m.appendChild(b); };
+  playlistItems(m,id,add);
+  placeMenu(m,anchor);
 }
 function ensureQueue(){ if(!S.queue.length && currentId()==null){} }
 function playNext(id){
@@ -1109,6 +1363,17 @@ function playNext(id){
   S.order.splice(S.pos+1,0,insertReal);
   renderQueue(); toast("Playing next");
   if(S.role==="output") syncState(); else cmdQueue();
+}
+// play `id` immediately, slotted in right after the current position (used for history rows)
+function playNow(id){
+  if(!S.queue.length){ playFrom([id],0); return; }
+  const insertReal=S.order[S.pos]+1;
+  S.queue.splice(insertReal,0,id);
+  S.order=S.order.map(v=>v>=insertReal?v+1:v);
+  S.order.splice(S.pos+1,0,insertReal);
+  S.pos++;
+  transitionTo(currentId(),FADE);
+  if(S.role!=="output") cmdPlayTrack();
 }
 function addQueue(id){
   if(!S.queue.length){ S.queue=[id]; buildOrder(0); showPlayer(); transitionTo(id,FADE);
@@ -1245,7 +1510,10 @@ addEventListener("keydown",e=>{
   else if(e.code==="ArrowLeft" && e.shiftKey) prevTrack();
   else if(e.code==="ArrowRight"){ cur().currentTime=Math.min((cur().duration||0),cur().currentTime+10); }
   else if(e.code==="ArrowLeft"){ cur().currentTime=Math.max(0,cur().currentTime-10); }
-  else if(e.code==="Escape"){ if($("#queuePop").classList.contains("open")) closeQueuePop(); else collapse(); }
+  else if(e.code==="Escape"){
+    if($("#queuePop").classList.contains("open")) closeQueuePop();
+    else if($("#sleepPop").classList.contains("open")) closeSleepPop();
+    else collapse(); }
 });
 
 // ---- persistence (per device) ----
@@ -1461,10 +1729,13 @@ function applyCmd(cmd){
 }
 
 function syncRoleUI(){
-  const rb=$("#roleBtn");
-  if(S.role==="output"){ rb.textContent="🔊 Output · this device"; rb.classList.remove("ctrl"); }
-  else if(S.role==="controller"){ rb.textContent="🎮 Control only"; rb.classList.add("ctrl"); }
-  else { rb.textContent="▶ Play here"; rb.classList.add("ctrl"); }
+  const rb=$("#roleBtn"), bb=$("#barRole");
+  if(S.role==="output"){ rb.textContent="🔊 Output · this device"; rb.classList.remove("ctrl");
+    bb.textContent="🔊"; bb.title="Output: this device — tap for control only"; bb.classList.remove("on"); }
+  else if(S.role==="controller"){ rb.textContent="🎮 Control only"; rb.classList.add("ctrl");
+    bb.textContent="🎮"; bb.title="Control only — tap to play here"; bb.classList.add("on"); }
+  else { rb.textContent="▶ Play here"; rb.classList.add("ctrl");
+    bb.textContent="▶"; bb.title="No output device — tap to play here"; bb.classList.add("on"); }
 }
 function claimOutput(){
   try{ localStorage.setItem("rolePref","output"); }catch(e){}
