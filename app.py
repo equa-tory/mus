@@ -8,8 +8,10 @@ Then open http://<this-machine-ip>:8000 on phone / PC / TV.
 """
 
 import os
+import hmac
 import time
 import json
+import hashlib
 import struct
 import shutil
 import asyncio
@@ -17,12 +19,33 @@ import sqlite3
 import threading
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Body, Request
+from fastapi import FastAPI, HTTPException, Body, Request, Depends
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 import queue as _queue
 
+def _load_dotenv(path: Path):
+    """Tiny .env reader (KEY=VALUE lines); real environment variables win."""
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return
+    for line in lines:
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        k, v = k.strip().removeprefix("export ").strip(), v.strip()
+        if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
+            v = v[1:-1]
+        os.environ.setdefault(k, v)
+
+_load_dotenv(Path(__file__).parent / ".env")
+
 # --- Configuration (override with env vars) --------------------------------
+# PASSWORD (env or .env): when set, only people who enter it can change anything;
+# everyone else is a read-only listener. Empty/unset = no login, everyone is an owner.
+PASSWORD = os.environ.get("PASSWORD", "")
 MUSIC_DIR = Path(os.environ.get("MUSIC_DIR", "./music")).expanduser().resolve()
 DATA_DIR = Path(os.environ.get("DATA_DIR", "./data")).expanduser().resolve()
 ART_DIR = DATA_DIR / "art"
@@ -38,6 +61,25 @@ MIME = {
 
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 ART_DIR.mkdir(parents=True, exist_ok=True)
+
+# --- Auth (single shared password, no usernames) ---------------------------
+# Logging in sets an HttpOnly cookie holding an HMAC derived from the password, so
+# changing the password logs everybody out. Reads (library, art, audio, sync feed)
+# stay open; every route that mutates anything depends on owner_only.
+AUTH_COOKIE = "mus_auth"
+_TOKEN = hmac.new(PASSWORD.encode(), b"mus-auth-v1", hashlib.sha256).hexdigest() if PASSWORD else ""
+_AUTH_LOCK = threading.Lock()
+_LOGIN_FAILS: dict[str, list[float]] = {}     # ip -> timestamps of recent bad passwords
+
+def _is_owner(request: Request) -> bool:
+    if not PASSWORD:
+        return True
+    return hmac.compare_digest(request.cookies.get(AUTH_COOKIE, ""), _TOKEN)
+
+def owner_only(request: Request):
+    if not _is_owner(request):
+        raise HTTPException(401, "Listen-only — enter the password to change things")
+OWNER = [Depends(owner_only)]
 
 # --- Database --------------------------------------------------------------
 def db():
@@ -152,6 +194,7 @@ SCAN_LOCK = threading.Lock()
 # never accidentally steal or duplicate audio just by opening the page.
 _SYNC_LOCK = threading.Lock()
 _SYNC_CLIENTS: dict[str, _queue.Queue] = {}   # cid -> per-client event queue
+_SYNC_LISTENERS: dict[str, _queue.Queue] = {}  # read-only guests: get state/role, never counted or output
 _SYNC_OUTPUT: str | None = None               # cid that currently owns audio
 _SYNC_STATE: dict = {}                        # last full state published by the output
 
@@ -402,7 +445,38 @@ def art(track_id: int):
         raise HTTPException(404, "No art")
     return FileResponse(p, media_type="image/png" if r["art_ext"] == ".png" else "image/jpeg")
 
-@app.post("/api/scan")
+@app.get("/api/auth")
+def auth_status(request: Request):
+    return {"required": bool(PASSWORD), "authed": _is_owner(request)}
+
+@app.post("/api/login")
+def login(request: Request, response: Response, body: dict = Body(...)):
+    if not PASSWORD:
+        return {"ok": True}
+    ip = request.client.host if request.client else "?"
+    now = time.time()
+    with _AUTH_LOCK:
+        recent = [t for t in _LOGIN_FAILS.get(ip, []) if now - t < 300]
+        _LOGIN_FAILS[ip] = recent
+        if len(recent) >= 5:
+            raise HTTPException(429, "Too many attempts — try again in a few minutes")
+    pw = body.get("password")
+    if isinstance(pw, str) and hmac.compare_digest(pw.encode(), PASSWORD.encode()):
+        with _AUTH_LOCK:
+            _LOGIN_FAILS.pop(ip, None)
+        response.set_cookie(AUTH_COOKIE, _TOKEN, max_age=365 * 86400, httponly=True,
+                            samesite="lax", secure=request.url.scheme == "https")
+        return {"ok": True}
+    with _AUTH_LOCK:
+        _LOGIN_FAILS[ip].append(now)
+    raise HTTPException(401, "Wrong password")
+
+@app.post("/api/logout")
+def logout(response: Response):
+    response.delete_cookie(AUTH_COOKIE)
+    return {"ok": True}
+
+@app.post("/api/scan", dependencies=OWNER)
 def scan():
     with SCAN_LOCK:
         if SCAN["running"]:
@@ -419,7 +493,7 @@ def scan():
 def scan_status():
     return SCAN
 
-@app.post("/api/like/{track_id}")
+@app.post("/api/like/{track_id}", dependencies=OWNER)
 def like(track_id: int):
     with db() as c:
         r = c.execute("SELECT liked FROM tracks WHERE id=?", (track_id,)).fetchone()
@@ -429,7 +503,7 @@ def like(track_id: int):
         c.execute("UPDATE tracks SET liked=? WHERE id=?", (new, track_id))
     return {"liked": bool(new)}
 
-@app.post("/api/play/{track_id}")
+@app.post("/api/play/{track_id}", dependencies=OWNER)
 def play(track_id: int):
     now = time.time()
     with db() as c:
@@ -470,7 +544,7 @@ def list_playlists():
             out.append(d)
         return out
 
-@app.post("/api/playlists")
+@app.post("/api/playlists", dependencies=OWNER)
 def create_playlist(body: dict = Body(...)):
     name = (body.get("name") or "Untitled").strip()
     is_smart = 1 if body.get("isSmart") else 0
@@ -480,7 +554,7 @@ def create_playlist(body: dict = Body(...)):
                         (name, is_smart, rules, time.time()))
         return {"id": cur.lastrowid}
 
-@app.put("/api/playlists/{pid}")
+@app.put("/api/playlists/{pid}", dependencies=OWNER)
 def update_playlist(pid: int, body: dict = Body(...)):
     with db() as c:
         if "name" in body:
@@ -489,13 +563,13 @@ def update_playlist(pid: int, body: dict = Body(...)):
             c.execute("UPDATE playlists SET rules=? WHERE id=?", (json.dumps(body["rules"]), pid))
     return {"ok": True}
 
-@app.delete("/api/playlists/{pid}")
+@app.delete("/api/playlists/{pid}", dependencies=OWNER)
 def delete_playlist(pid: int):
     with db() as c:
         c.execute("DELETE FROM playlists WHERE id=?", (pid,))
     return {"ok": True}
 
-@app.post("/api/playlists/{pid}/tracks")
+@app.post("/api/playlists/{pid}/tracks", dependencies=OWNER)
 def add_to_playlist(pid: int, body: dict = Body(...)):
     tid = body["trackId"]
     with db() as c:
@@ -505,22 +579,26 @@ def add_to_playlist(pid: int, body: dict = Body(...)):
                   (pid, tid, pos))
     return {"ok": True}
 
-@app.delete("/api/playlists/{pid}/tracks/{tid}")
+@app.delete("/api/playlists/{pid}/tracks/{tid}", dependencies=OWNER)
 def remove_from_playlist(pid: int, tid: int):
     with db() as c:
         c.execute("DELETE FROM playlist_tracks WHERE playlist_id=? AND track_id=?", (pid, tid))
     return {"ok": True}
 
 def _sync_send(msg: dict, exclude: str | None = None):
-    """Broadcast msg to every connected client except `exclude`, dropping dead queues."""
+    """Broadcast msg to every connected client except `exclude`, dropping dead queues.
+    Read-only listeners get everything except controller commands."""
     with _SYNC_LOCK:
-        dead = []
-        for cid, cq in _SYNC_CLIENTS.items():
-            if cid == exclude:
+        for group in (_SYNC_CLIENTS, _SYNC_LISTENERS):
+            if group is _SYNC_LISTENERS and msg.get("type") == "cmd":
                 continue
-            try: cq.put_nowait(msg)
-            except _queue.Full: dead.append(cid)
-        for cid in dead: _SYNC_CLIENTS.pop(cid, None)
+            dead = []
+            for cid, cq in group.items():
+                if cid == exclude:
+                    continue
+                try: cq.put_nowait(msg)
+                except _queue.Full: dead.append(cid)
+            for cid in dead: group.pop(cid, None)
 
 def _sync_roles():
     with _SYNC_LOCK:
@@ -528,15 +606,19 @@ def _sync_roles():
     _sync_send({"type": "role", "output": _SYNC_OUTPUT, "peers": peers})
 
 @app.get("/api/sync/events")
-def sync_events(cid: str, want: str = "controller"):
+def sync_events(request: Request, cid: str, want: str = "controller"):
     global _SYNC_OUTPUT
+    owner = _is_owner(request)
     cq: _queue.Queue = _queue.Queue(maxsize=50)
     with _SYNC_LOCK:
-        _SYNC_CLIENTS[cid] = cq
         claimed_output = False
-        if want == "output" and _SYNC_OUTPUT in (None, cid):
-            _SYNC_OUTPUT = cid
-            claimed_output = True
+        if owner:
+            _SYNC_CLIENTS[cid] = cq
+            if want == "output" and _SYNC_OUTPUT in (None, cid):
+                _SYNC_OUTPUT = cid
+                claimed_output = True
+        else:
+            _SYNC_LISTENERS[cid] = cq     # guests can watch, never drive
         peers = len(_SYNC_CLIENTS)
     cq.put_nowait({"type": "hello", "output": _SYNC_OUTPUT, "state": _SYNC_STATE, "peers": peers})
     if claimed_output:
@@ -554,8 +636,8 @@ def sync_events(cid: str, want: str = "controller"):
             global _SYNC_OUTPUT
             was_output = False
             with _SYNC_LOCK:
-                _SYNC_CLIENTS.pop(cid, None)
-                if _SYNC_OUTPUT == cid:
+                (_SYNC_CLIENTS if owner else _SYNC_LISTENERS).pop(cid, None)
+                if owner and _SYNC_OUTPUT == cid:
                     _SYNC_OUTPUT = None
                     was_output = True
             if was_output:
@@ -563,7 +645,7 @@ def sync_events(cid: str, want: str = "controller"):
     return StreamingResponse(gen(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
-@app.post("/api/sync/state")
+@app.post("/api/sync/state", dependencies=OWNER)
 def sync_state(body: dict = Body(...)):
     global _SYNC_STATE
     cid = body.get("cid")
@@ -576,7 +658,7 @@ def sync_state(body: dict = Body(...)):
 
 _SETTINGS_CMDS = {"volume", "crossfade", "shuffle", "repeat", "sleep"}
 
-@app.post("/api/sync/cmd")
+@app.post("/api/sync/cmd", dependencies=OWNER)
 def sync_cmd(body: dict = Body(...)):
     global _SYNC_STATE
     cid = body.get("cid")
@@ -587,7 +669,7 @@ def sync_cmd(body: dict = Body(...)):
     _sync_send({"type": "cmd", "from": cid, "cmd": cmd}, exclude=cid)
     return {"ok": True}
 
-@app.post("/api/sync/claim")
+@app.post("/api/sync/claim", dependencies=OWNER)
 def sync_claim(body: dict = Body(...)):
     global _SYNC_OUTPUT
     cid = body.get("cid")
@@ -598,7 +680,7 @@ def sync_claim(body: dict = Body(...)):
     _sync_roles()
     return {"ok": True, "output": _SYNC_OUTPUT}
 
-@app.post("/api/sync/release")
+@app.post("/api/sync/release", dependencies=OWNER)
 def sync_release(body: dict = Body(...)):
     global _SYNC_OUTPUT
     cid = body.get("cid")
@@ -611,7 +693,7 @@ def sync_release(body: dict = Body(...)):
         _sync_roles()
     return {"ok": True}
 
-@app.post("/api/sync/leave")
+@app.post("/api/sync/leave", dependencies=OWNER)
 def sync_leave(body: dict = Body(...)):
     global _SYNC_OUTPUT
     cid = body.get("cid")

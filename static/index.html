@@ -368,6 +368,33 @@
     body.side-mode.side-open header,body.side-mode.side-open nav{margin-right:var(--side-w)}
     body.side-open #barQueue{display:none}
   }
+
+  /* ---- password set + not logged in = listen-only guest ---- */
+  #authBtn{display:none;white-space:nowrap;border:1px solid var(--line);background:var(--bg2);color:var(--muted);
+    padding:9px 12px;border-radius:10px;font-size:13px}
+  #authBtn:hover{color:var(--text);border-color:var(--accent-dim)}
+  body.auth-on #authBtn{display:block}
+  body.guest #scanBtn,body.guest #roleBtn,body.guest #barRole,body.guest #barAdd{display:none!important}
+  .auth-err{min-height:18px;margin-top:8px;font-size:13px;color:#e07a5f}
+  body.following .ctrl,body.following .transport,body.following .bar-seek,body.following .seek{opacity:.45}
+  #live{display:none;position:fixed;right:16px;bottom:calc(var(--bar-h) + var(--safe) + 24px);z-index:35;width:270px;
+    background:var(--bg2);border:1px solid var(--line);border-radius:14px;padding:11px 13px;
+    box-shadow:0 12px 34px rgba(0,0,0,.5);transition:right .38s var(--ease)}
+  body.guest #live{display:block}
+  .live-head{display:flex;align-items:center;gap:8px;font-size:12px;letter-spacing:.4px;text-transform:uppercase;color:var(--muted)}
+  .live-head span{flex:1}
+  .live-head button{color:var(--muted);width:22px;height:22px;border-radius:6px;line-height:1}
+  .live-head button:hover{color:var(--text);background:var(--bg3)}
+  .live-dot{width:8px;height:8px;border-radius:50%;background:var(--muted2)}
+  #live.on .live-dot{background:var(--accent);box-shadow:0 0 0 0 var(--accent);animation:livePulse 1.8s infinite}
+  @keyframes livePulse{70%{box-shadow:0 0 0 7px transparent}100%{box-shadow:0 0 0 0 transparent}}
+  #liveNow{margin:9px 0 10px;font-size:14px;line-height:1.35;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+  .live-btns{display:flex;gap:8px}
+  .live-btns .btn{flex:1;padding:8px 10px;font-size:13px;text-align:center}
+  .btn:disabled{opacity:.45;cursor:default}
+  #live.min{width:auto}
+  #live.min .live-body{display:none}
+  @media(min-width:900px) and (hover:hover){ body.side-open #live{right:calc(var(--side-w) + 16px)} }
 </style>
 </head>
 <body>
@@ -375,6 +402,7 @@
     <div class="brand"><i class="mark"></i><span>Library</span></div>
     <input id="search" type="search" placeholder="Search title, artist, album" autocomplete="off">
     <button id="scanBtn">Scan</button>
+    <button id="authBtn"></button>
   </header>
   <nav id="tabs"></nav>
   <main id="list"></main>
@@ -476,6 +504,13 @@
     </div>
   </section>
 
+  <div id="live">
+    <div class="live-head"><i class="live-dot"></i><span id="liveHead">Live</span><button id="liveMin" title="Minimize">–</button></div>
+    <div class="live-body">
+      <div id="liveNow"></div>
+      <div class="live-btns"><button class="btn accent" id="liveJoin">Listen along</button><button class="btn" id="liveLogin">Log in</button></div>
+    </div>
+  </div>
   <div id="toast"></div>
 
 <script>
@@ -493,6 +528,7 @@ const S = {
   volume:0.9, crossfade:4, playing:false,
   sleep:null, _xfading:false, _counted:false, _seeking:false, role:null, _ctrlTime:null, _ctrlTimeAt:null,
   playlists:[], syncPeers:0, hist:[],
+  auth:{required:false,authed:true}, guest:false, follow:false, live:null, liveOnline:false, _followId:null,
 };
 const TABS = [["library","Library"],["recent","Recently added"],["liked","Liked"],
               ["most","Most played"],["history","History"],["playlists","Playlists"]];
@@ -526,7 +562,7 @@ function onAudioError(e){
   const id=currentId(), t=id!=null?tr(id):null;
   if(t){ t.failed=true; markFailed(id); }
   toast("Can’t play “"+(t?t.title:"this track")+"” — skipping");
-  if(!S.playing) return; // e.g. resumed-on-load track: flag it, but don't start playing something else
+  if(S.follow||!S.playing) return; // e.g. resumed-on-load track: flag it, but don't start playing something else
   if(++_errRun>=5){ _errRun=0; stopPlay(); return; }
   const nid=peekNext(); nid==null ? stopPlay() : transitionTo(nid,0);
 }
@@ -610,6 +646,11 @@ function crossfade(out,inn,dur,done){
 
 // ---- data ----
 const tr = id => S.byId.get(id);
+// Password set and not logged in = "guest": can browse and play locally, or listen along with the
+// owner, but the server rejects every write (and this UI says so instead of trying).
+function denyGuest(){ if(!S.guest) return false; toast("Listen-only — log in to change things"); return true; }
+// while listening along, playback is driven by the owner's published state, not by this device
+function followLocked(){ if(!S.follow) return false; toast("Listening along — tap Stop to take control"); return true; }
 // set a title element's text, plus the little ALAC tag for tracks served via live transcode
 function setTitle(e,t){
   e.textContent=t.title;
@@ -815,6 +856,7 @@ function peekNext(){           // id of next track or null, advancing pos only i
 // ---- playback ----
 function showPlayer(){ $("#player").classList.remove("hidden"); }
 function playFrom(ids,i){
+  if(followLocked()) return;
   S.queue=ids.slice(); buildOrder(i);
   showPlayer(); transitionTo(currentId(), FADE);
   if(S.role!=="output") cmdPlayTrack();
@@ -870,7 +912,7 @@ function setArt(img,url){ if(url){ img.style.visibility="visible"; img.src=url; 
 // state rather than "toggle", so a double-tap or a dropped/reordered remote
 // command converges on the right answer instead of cancelling out.
 function setPlaying(want){
-  if(!currentId()) return;
+  if(!currentId()||followLocked()) return;
   if(S.role!=="output"){
     // optimistic local feedback so the button responds instantly instead of
     // waiting for a round-trip state push, then tell the output what we want
@@ -885,10 +927,12 @@ function setPlaying(want){
 }
 function togglePlay(){ setPlaying(!S.playing); }
 function nextTrack(){
+  if(followLocked()) return;
   if(S.role!=="output"){ sendCmd({name:"next"}); return; }
   const id=peekNext(); if(id!=null) transitionTo(id,FADE);
 }
 function prevTrack(){
+  if(followLocked()) return;
   if(S.role!=="output"){ sendCmd({name:"prev"}); return; }
   if(cur().currentTime>3){ cur().currentTime=0; return; }
   if(S.pos>0){ S.pos--; transitionTo(currentId(),FADE); }
@@ -902,7 +946,7 @@ function onTime(e){
   const a=cur(); drawTimes();
   // count a play once it's actually been "heard"
   if(!S._counted && a.duration && a.currentTime>=Math.min(10,a.duration*0.5)) countPlay();
-  if(S.role!=="output") return;
+  if(S.role!=="output"||S.follow) return;
   // auto crossfade into next near the end
   if(S.crossfade>0 && !S._xfading && a.duration && a.currentTime>2){
     const remain=a.duration-a.currentTime;
@@ -915,14 +959,14 @@ function onTime(e){
 }
 function onEnded(e){
   if(e.target!==cur()) return;
-  if(S.role!=="output") return;
+  if(S.role!=="output"||S.follow) return;
   if(!S._counted) countPlay();
   if(S.sleep && S.sleep.endOfTrack){ stopPlay(); clearSleep(); return; }
   const id=peekNext();
   id==null ? stopPlay() : transitionTo(id,0);
 }
 function countPlay(){
-  S._counted=true; const id=currentId(); if(id==null) return;
+  S._counted=true; const id=currentId(); if(id==null||S.guest) return;
   fetch("api/play/"+id,{method:"POST"}).then(refreshSideHistory).catch(()=>{});
   const t=tr(id); if(t){ t.playCount=(t.playCount||0)+1; t.lastPlayedAt=Date.now()/1000;
     if(S.view==="most"||S.view==="history") {/* refresh later */} }
@@ -961,6 +1005,7 @@ function markPlayingRow(id){
 
 // ---- likes ----
 async function toggleLike(id){
+  if(denyGuest()) return;
   const r=await fetch("api/like/"+id,{method:"POST"}); const {liked}=await r.json();
   tr(id).liked=liked;
   const row=listEl.querySelector('.row[data-id="'+id+'"] .like');
@@ -1102,11 +1147,13 @@ function setShuffle(v){
 }
 function setRepeat(v){ S.repeat=v; syncRepeatUI(); persist(); syncState(); }
 function toggleShuffle(){
+  if(followLocked()) return;
   const next=!S.shuffle;
   if(S.role!=="output"){ S.shuffle=next; syncShuffleUI(); sendCmd({name:"shuffle",value:next}); return; }
   setShuffle(next);
 }
 function cycleRepeat(){
+  if(followLocked()) return;
   const next=S.repeat==="off"?"all":S.repeat==="all"?"one":"off";
   if(S.role!=="output"){ S.repeat=next; syncRepeatUI(); sendCmd({name:"repeat",value:next}); return; }
   setRepeat(next);
@@ -1139,6 +1186,7 @@ bindSeek($("#seek")); bindSeek($("#barSeek"));
 // seekTo is the "apply this exact time" primitive, reused by the local seek bar
 // (output) and by applyCmd (output executing a remote seek from a controller).
 function seekTo(time){
+  if(followLocked()) return;
   if(S.role!=="output"){ S._ctrlTime=time; S._ctrlTimeAt=performance.now(); drawTimes(); sendCmd({name:"seek",value:time}); return; }
   const dur=cur().duration||tr(currentId())?.duration||0;
   if(dur) cur().currentTime=Math.max(0,Math.min(dur,time));
@@ -1312,9 +1360,11 @@ function openMenu(anchor, id){
   const add=(label,fn)=>{ const b=el("button"); b.textContent=label; b.onclick=()=>{fn();closeMenu();}; m.appendChild(b); };
   add("Play next",()=>playNext(id));
   add("Add to queue",()=>addQueue(id));
-  add(t.liked?"Unlike":"Like",()=>toggleLike(id));
-  const sep=el("div","sep"); m.appendChild(sep);
-  playlistItems(m,id,add);
+  if(!S.guest){
+    add(t.liked?"Unlike":"Like",()=>toggleLike(id));
+    const sep=el("div","sep"); m.appendChild(sep);
+    playlistItems(m,id,add);
+  }
   placeMenu(m,anchor);
 }
 function placeMenu(m,anchor){
@@ -1335,6 +1385,7 @@ function playlistItems(m,id,add){
   add("+ New playlist…",()=>newPlaylist(false,id));
 }
 async function togglePlaylistTrack(p,id,has){
+  if(denyGuest()) return;
   if(has) await fetch("api/playlists/"+p.id+"/tracks/"+id,{method:"DELETE"});
   else await fetch("api/playlists/"+p.id+"/tracks",{method:"POST",headers:{"Content-Type":"application/json"},
     body:JSON.stringify({trackId:id})});
@@ -1354,6 +1405,7 @@ function playlistPicker(anchor,id){
 }
 function ensureQueue(){ if(!S.queue.length && currentId()==null){} }
 function playNext(id){
+  if(followLocked()) return;
   if(!S.queue.length){ S.queue=[id]; buildOrder(0); showPlayer(); transitionTo(id,FADE);
     if(S.role!=="output") cmdPlayTrack();
     return; }
@@ -1366,6 +1418,7 @@ function playNext(id){
 }
 // play `id` immediately, slotted in right after the current position (used for history rows)
 function playNow(id){
+  if(followLocked()) return;
   if(!S.queue.length){ playFrom([id],0); return; }
   const insertReal=S.order[S.pos]+1;
   S.queue.splice(insertReal,0,id);
@@ -1376,6 +1429,7 @@ function playNow(id){
   if(S.role!=="output") cmdPlayTrack();
 }
 function addQueue(id){
+  if(followLocked()) return;
   if(!S.queue.length){ S.queue=[id]; buildOrder(0); showPlayer(); transitionTo(id,FADE);
     if(S.role!=="output") cmdPlayTrack();
     return; }
@@ -1383,6 +1437,7 @@ function addQueue(id){
   if(S.role==="output") syncState(); else cmdQueue();
 }
 async function addToPlaylist(pid,tid){
+  if(denyGuest()) return;
   await fetch("api/playlists/"+pid+"/tracks",{method:"POST",headers:{"Content-Type":"application/json"},
     body:JSON.stringify({trackId:tid})});
   await loadPlaylists(); toast("Added to playlist");
@@ -1392,6 +1447,7 @@ async function addToPlaylist(pid,tid){
 function modal(node){ const m=el("div","modal"); m.appendChild(node);
   m.onclick=e=>{ if(e.target===m) m.remove(); }; document.body.appendChild(m); return m; }
 function newPlaylist(smart, addId){
+  if(denyGuest()) return;
   const card=el("div","card");
   card.innerHTML="<h3>"+(smart?"New smart playlist":"New playlist")+"</h3>";
   const f1=el("div","field"); f1.innerHTML='<label>Name</label>';
@@ -1440,6 +1496,7 @@ function newPlaylist(smart, addId){
   };
 }
 function playlistMenu(e,p){
+  if(denyGuest()) return;
   closeMenu(); scrim=el("div","scrim"); scrim.onclick=closeMenu; document.body.appendChild(scrim);
   const m=el("div","menu");
   const add=(l,fn)=>{ const b=el("button"); b.textContent=l; b.onclick=()=>{fn();closeMenu();}; m.appendChild(b); };
@@ -1463,6 +1520,7 @@ function renamePlaylist(p){
 // ---- scan ----
 const scanBtn=$("#scanBtn");
 async function doScan(){
+  if(denyGuest()) return;
   const r=await fetch("api/scan",{method:"POST"});
   if(r.status===409){ toast("Already scanning…"); }
   scanBtn.disabled=true;
@@ -1499,7 +1557,7 @@ if("mediaSession" in navigator){
   ms.setActionHandler("previoustrack",prevTrack); ms.setActionHandler("nexttrack",nextTrack);
   try{ ms.setActionHandler("seekforward",()=>nextTrack()); }catch(e){}
   try{ ms.setActionHandler("seekbackward",()=>prevTrack()); }catch(e){}
-  try{ ms.setActionHandler("seekto",d=>{ if(d.seekTime!=null&&S.role==="output") cur().currentTime=d.seekTime; }); }catch(e){}
+  try{ ms.setActionHandler("seekto",d=>{ if(d.seekTime!=null&&S.role==="output"&&!S.follow) cur().currentTime=d.seekTime; }); }catch(e){}
 }
 
 // ---- keyboard (PC / some TV remotes) ----
@@ -1508,6 +1566,7 @@ addEventListener("keydown",e=>{
   if(e.code==="Space"){ e.preventDefault(); togglePlay(); }
   else if(e.code==="ArrowRight" && e.shiftKey) nextTrack();
   else if(e.code==="ArrowLeft" && e.shiftKey) prevTrack();
+  else if(S.follow&&e.code.startsWith("Arrow")) return;
   else if(e.code==="ArrowRight"){ cur().currentTime=Math.min((cur().duration||0),cur().currentTime+10); }
   else if(e.code==="ArrowLeft"){ cur().currentTime=Math.max(0,cur().currentTime-10); }
   else if(e.code==="Escape"){
@@ -1562,6 +1621,7 @@ const CLIENT_ID=Math.random().toString(36).slice(2,10);
 let _applyingSync=false, _syncT=null, _lastState=null, _syncBooted=false;
 
 function sendCmd(cmd){
+  if(S.guest) return;
   fetch("api/sync/cmd",{method:"POST",headers:{"Content-Type":"application/json"},
     body:JSON.stringify({cid:CLIENT_ID,cmd})}).catch(()=>{});
 }
@@ -1575,7 +1635,7 @@ function currentStatePayload(){
     shuffle:S.shuffle, repeat:S.repeat, volume:S.volume, crossfade:S.crossfade, sleep:S.sleep };
 }
 function pushState(){
-  if(S.role!=="output") return;
+  if(S.role!=="output"||S.guest) return;
   const state=currentStatePayload();
   _lastState=state; // the server never echoes a state push back to its sender,
   // so without this an output that had never received a synced state would
@@ -1587,7 +1647,7 @@ function pushState(){
 // debounced publish, called after any local mutation on the output (mirrors
 // the old syncState() name/shape so existing call sites don't need to change)
 function syncState(){
-  if(_applyingSync||S.role!=="output") return;
+  if(_applyingSync||S.role!=="output"||S.guest) return;
   clearTimeout(_syncT);
   _syncT=setTimeout(pushState,300);
 }
@@ -1738,11 +1798,13 @@ function syncRoleUI(){
     bb.textContent="▶"; bb.title="No output device — tap to play here"; bb.classList.add("on"); }
 }
 function claimOutput(){
+  if(S.guest) return;
   try{ localStorage.setItem("rolePref","output"); }catch(e){}
   fetch("api/sync/claim",{method:"POST",headers:{"Content-Type":"application/json"},
     body:JSON.stringify({cid:CLIENT_ID})}).catch(()=>{});
 }
 function releaseOutput(){
+  if(S.guest) return;
   try{ localStorage.setItem("rolePref","controller"); }catch(e){}
   fetch("api/sync/release",{method:"POST",headers:{"Content-Type":"application/json"},
     body:JSON.stringify({cid:CLIENT_ID})}).catch(()=>{});
@@ -1792,6 +1854,7 @@ function connectSync(){
   _es.onmessage=e=>{
     if(e.data==="connected") return;
     let msg; try{ msg=JSON.parse(e.data); }catch(ex){ return; }
+    if(S.guest){ guestSyncMsg(msg); return; }
     if(msg.type==="hello"){
       // If this connection is about to make us the output, don't run the
       // stale broadcast state's track/queue/pos through applyState — that
@@ -1814,6 +1877,7 @@ function connectSync(){
   _es.onerror=()=>{ try{_es.close();}catch(e){} setTimeout(connectSync,4000); };
 }
 addEventListener("pagehide",()=>{
+  if(S.guest) return;
   try{ navigator.sendBeacon("api/sync/leave", new Blob([JSON.stringify({cid:CLIENT_ID})],{type:"application/json"})); }catch(e){}
 });
 // A tab hidden mid-fade can suspend requestAnimationFrame before fade()'s own
@@ -1834,11 +1898,117 @@ setInterval(()=>{
   }
 },250);
 
+// ---- listen-only guests: listen along with the owner ----
+// A guest's <audio> is purely local (S.role stays "output" so all playback code works unchanged) but
+// it never publishes state, sends commands or claims output. The server streams the owner's state
+// to guests read-only; while following, each state push is mirrored onto this device's own audio:
+// same track, same play/pause, same position (re-seeked whenever it drifts by more than a moment).
+const live=$("#live");
+function renderLive(){
+  if(!S.guest) return;
+  const st=S.live, on=S.liveOnline, t=st&&st.id!=null?tr(st.id):null;
+  const label=t?t.title+" — "+t.artist:"";
+  live.classList.toggle("on",!!(on&&st&&st.playing));
+  $("#liveHead").textContent=S.follow?"Listening along":"Live";
+  $("#liveNow").textContent=S.follow
+    ? (on&&t ? (st.playing?"":"⏸ ")+label : "Waiting for the owner…")
+    : (!on ? "Owner is offline" : t ? (st.playing?"▶ ":"⏸ ")+label : "Owner isn’t playing anything");
+  const join=$("#liveJoin");
+  join.textContent=S.follow?"Stop":"Listen along"; join.disabled=!S.follow&&!(on&&t);
+}
+function followApply(st){
+  if(!S.follow||!st||st.id==null||!S.byId.has(st.id)) return;
+  _applyingSync=true;
+  try{
+    const id=st.id;
+    if(Array.isArray(st.queue)) S.queue=st.queue;
+    if(Array.isArray(st.order)) S.order=st.order;
+    if(typeof st.pos==="number") S.pos=st.pos;
+    const realIdx=S.queue.indexOf(id);
+    if(realIdx!==-1){ const slot=S.order.indexOf(realIdx); if(slot!==-1) S.pos=slot; }
+    const time=st.time||0, a=cur();
+    if(id!==S._followId){
+      S._followId=id;
+      loadAt(id,time,!!st.playing);
+    } else {
+      if(st.playing&&a.paused){ S.playing=true; const p=a.play(); if(p&&p.catch)p.catch(()=>{}); }
+      else if(!st.playing&&!a.paused){ S.playing=false; a.pause(); }
+      if(a.duration&&Math.abs(a.currentTime-time)>1.5) a.currentTime=time+(st.playing?0.2:0);
+      updatePlay(); markPlayingRow(id); renderQueue();
+    }
+  } finally { _applyingSync=false; }
+}
+function startFollow(){
+  if(!S.live||S.live.id==null||!S.liveOnline) return;
+  S.follow=true; S._followId=null; document.body.classList.add("following");
+  followApply(S.live); renderLive();
+}
+function stopFollow(){
+  S.follow=false; document.body.classList.remove("following");
+  const a=cur(); S.playing=false; a.pause(); updatePlay(); markPlayingRow(currentId()); persist();
+  renderLive(); toast("Stopped listening along");
+}
+function guestSyncMsg(msg){
+  if(msg.type==="hello"||msg.type==="role") S.liveOnline=msg.output!=null;
+  if(msg.type==="hello"||msg.type==="state") S.live=msg.state&&msg.state.id!=null?msg.state:null;
+  if(msg.type==="hello"&&!S._guestBooted){
+    S._guestBooted=true;
+    // default for a guest: tune in to whatever the owner is playing right now
+    if(S.liveOnline&&S.live) startFollow();
+    else if(S._resume){ loadAt(S._resume.id,S._resume.time,false); }
+    S._resume=null;
+  } else if(S.follow){
+    if(!S.liveOnline){ const a=cur(); S.playing=false; a.pause(); updatePlay(); markPlayingRow(currentId()); }
+    else if(S.live) followApply(S.live);
+  }
+  renderLive();
+}
+// the browser may refuse to start audio before the first tap; once it happens, catch up with the owner
+addEventListener("pointerdown",()=>{
+  if(S.follow&&S.live&&S.live.playing&&cur().paused&&S.liveOnline) followApply(S.live);
+},true);
+$("#liveJoin").onclick=()=>S.follow?stopFollow():startFollow();
+$("#liveLogin").onclick=()=>loginModal();
+$("#liveMin").onclick=()=>{ const m=live.classList.toggle("min"); $("#liveMin").textContent=m?"+":"–";
+  try{ localStorage.setItem("liveMin",m?"1":""); }catch(e){} };
+try{ if(localStorage.getItem("liveMin")){ live.classList.add("min"); $("#liveMin").textContent="+"; } }catch(e){}
+
+// ---- login (one shared password, no usernames) ----
+function loginModal(){
+  const card=el("div","card"); card.innerHTML="<h3>Log in</h3>";
+  const inp=el("input"); inp.type="password"; inp.placeholder="Password"; inp.autocomplete="current-password";
+  const err=el("div","auth-err");
+  const foot=el("div","card-foot"), cancel=el("button","btn"), go=el("button","btn accent");
+  cancel.textContent="Cancel"; go.textContent="Log in"; foot.append(cancel,go);
+  card.append(inp,err,foot);
+  const m=modal(card); inp.focus(); cancel.onclick=()=>m.remove();
+  const submit=async()=>{
+    err.textContent="";
+    const r=await fetch("api/login",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({password:inp.value})}).catch(()=>null);
+    if(r&&r.ok){ location.reload(); return; }
+    err.textContent=!r?"Can’t reach the server":r.status===429?"Too many attempts — try again in a few minutes":"Wrong password";
+    inp.select();
+  };
+  go.onclick=submit; inp.addEventListener("keydown",e=>{ if(e.key==="Enter") submit(); });
+}
+function logout(){ fetch("api/logout",{method:"POST"}).catch(()=>{}).then(()=>location.reload()); }
+async function initAuth(){
+  try{ S.auth=await (await fetch("api/auth")).json(); }catch(e){}
+  S.guest=!!(S.auth.required&&!S.auth.authed);
+  if(S.guest) S.role="output";       // local-only player, see above
+  document.body.classList.toggle("guest",S.guest);
+  document.body.classList.toggle("auth-on",!!S.auth.required);
+  $("#authBtn").textContent=S.guest?"🔒 Log in":"Log out";
+  $("#authBtn").onclick=()=>S.guest?loginModal():logout();
+  renderLive();
+}
+
 // ---- boot ----
 // Load the library and restore local playback state first, then connect to
 // the sync channel — connecting too early would let a device apply synced
 // state (and possibly play audio) before it even knows what track ids exist.
-(async()=>{ await loadTracks(); await loadPlaylists(); restore(); connectSync(); })();
+(async()=>{ await initAuth(); await loadTracks(); await loadPlaylists(); restore(); connectSync(); })();
 })();
 </script>
 </body>
