@@ -804,6 +804,7 @@ function render(){
     const more=el("button","more"); more.textContent="⋯";
     more.onclick=e=>{ e.stopPropagation(); openMenu(e.currentTarget, id); };
     row.append(art,meta,like,end,more);
+    row.oncontextmenu=e=>{ e.preventDefault(); openMenu({x:e.clientX,y:e.clientY}, id); };
     row.onclick=()=>{
       if(t.broken){ toast("“"+t.title+"” is an empty file — re-download it"); return; }
       playFrom(ids,i); };
@@ -1064,9 +1065,9 @@ $("#dockBtn").onclick=()=>{
   g.addEventListener("pointerup",end); g.addEventListener("pointercancel",end);
 }
 try{
-  if(localStorage.getItem("sheetMode")==="side") document.body.classList.add("side-mode");
+  if(localStorage.getItem("sheetMode")!=="full") document.body.classList.add("side-mode");
   const w=+localStorage.getItem("sideW"); if(w>0) sideWPref=w;
-}catch(e){}
+}catch(e){ document.body.classList.add("side-mode"); }
 applySideW(); updateDockUI();
 $("#collapse").onclick=collapse;
 $("#barPlay").onclick=e=>{e.stopPropagation();togglePlay();};
@@ -1355,7 +1356,7 @@ let scrim=null;
 function closeMenu(){ document.querySelectorAll(".menu").forEach(m=>m.remove()); if(scrim){scrim.remove();scrim=null;} }
 function openMenu(anchor, id){
   closeMenu();
-  scrim=el("div","scrim"); scrim.onclick=closeMenu; document.body.appendChild(scrim);
+  scrim=el("div","scrim"); scrim.onclick=closeMenu; scrim.oncontextmenu=e=>{ e.preventDefault(); closeMenu(); }; document.body.appendChild(scrim);
   const m=el("div","menu"); const t=tr(id);
   const add=(label,fn)=>{ const b=el("button"); b.textContent=label; b.onclick=()=>{fn();closeMenu();}; m.appendChild(b); };
   add("Play next",()=>playNext(id));
@@ -1369,9 +1370,10 @@ function openMenu(anchor, id){
 }
 function placeMenu(m,anchor){
   document.body.appendChild(m);
-  const r=anchor.getBoundingClientRect();
-  let top=r.bottom+6, left=Math.min(r.left, innerWidth-m.offsetWidth-10);
-  if(top+m.offsetHeight>innerHeight-10) top=r.top-m.offsetHeight-6;
+  // anchor is an element, or a {x,y} point (right-click: open right at the cursor)
+  const pt=anchor.x!=null, r=pt?{left:anchor.x,top:anchor.y,bottom:anchor.y}:anchor.getBoundingClientRect(), gap=pt?0:6;
+  let top=r.bottom+gap, left=Math.min(r.left, innerWidth-m.offsetWidth-10);
+  if(top+m.offsetHeight>innerHeight-10) top=r.top-m.offsetHeight-gap;
   m.style.top=Math.max(10,top)+"px"; m.style.left=Math.max(10,left)+"px";
 }
 // "Add to playlist" entries: a ✓ marks playlists that already hold the track, and
@@ -2008,7 +2010,7 @@ async function initAuth(){
 // Load the library and restore local playback state first, then connect to
 // the sync channel — connecting too early would let a device apply synced
 // state (and possibly play audio) before it even knows what track ids exist.
-(async()=>{ await initAuth(); await loadTracks(); await loadPlaylists(); restore(); connectSync(); })();
+(async()=>{ await initAuth(); await loadTracks(); await loadPlaylists(); restore(); connectSync(); if(sideActive()) expand(); })();
 })();
 </script>
 </body>
