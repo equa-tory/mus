@@ -61,7 +61,7 @@ def _env_num(name: str, default: float) -> float:
         return default
 
 # Automatic DB backups: BACKUP_DIR="" disables them, BACKUP_EVERY_HOURS=0 = manual only.
-BACKUP_DIR_RAW = os.environ.get("BACKUP_DIR", "/mnt/backup/mus").strip()
+BACKUP_DIR_RAW = os.environ.get("BACKUP_DIR", "/mnt/ssd/backups/mus").strip()
 BACKUP_DIR = Path(BACKUP_DIR_RAW).expanduser() if BACKUP_DIR_RAW else None
 BACKUP_EVERY_HOURS = max(0.0, _env_num("BACKUP_EVERY_HOURS", 48))
 BACKUP_KEEP = max(1, int(_env_num("BACKUP_KEEP", 1)))

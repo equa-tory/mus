@@ -104,7 +104,7 @@ else
   $SUDO install -m 644 "$tmp" "$UNIT_PATH"; rm -f "$tmp"
 fi
 # default backup folder (override with BACKUP_DIR in .env): make sure the service user can write it
-BK=${BACKUP_DIR-/mnt/backup/mus}
+BK=${BACKUP_DIR-/mnt/ssd/backups/mus}
 if [[ -n $BK && ! -d $BK ]]; then
   say "Creating backup folder $BK"
   run $SUDO mkdir -p "$BK" && run $SUDO chown "$SVC_USER" "$BK" || warn "could not create $BK — backups will report an error until it exists"
