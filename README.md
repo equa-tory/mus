@@ -29,3 +29,7 @@ With one set, anyone can open the site and play any song, but only people who en
 haven't logged in get a small corner panel that starts out **listening along** with whatever you're
 playing (same track, same position, follows pause/skip/seek); **Stop** lets them play their own music
 locally, which is never saved to the server.
+
+## Backups
+
+The database (library index, likes, playlists, history) is backed up automatically: by default every 48 h into `/mnt/backup/mus`, keeping the newest 1. Override in `.env` (see `.env.example`): `BACKUP_DIR` (empty = off), `BACKUP_EVERY_HOURS` (`0` = manual only), `BACKUP_KEEP`. The ⚙ button in the header lists the backups and lets you download or restore one, restore from an uploaded file, or back up right now. Cover art isn't included — a scan rebuilds it. Make sure the service user can write to the backup folder (`install.sh` creates the default one).

@@ -103,6 +103,12 @@ else
   tmp=$(mktemp); printf '%s\n' "$unit" >"$tmp"
   $SUDO install -m 644 "$tmp" "$UNIT_PATH"; rm -f "$tmp"
 fi
+# default backup folder (override with BACKUP_DIR in .env): make sure the service user can write it
+BK=${BACKUP_DIR-/mnt/backup/mus}
+if [[ -n $BK && ! -d $BK ]]; then
+  say "Creating backup folder $BK"
+  run $SUDO mkdir -p "$BK" && run $SUDO chown "$SVC_USER" "$BK" || warn "could not create $BK — backups will report an error until it exists"
+fi
 run $SUDO systemctl daemon-reload
 run $SUDO systemctl enable "$SERVICE"
 run $SUDO systemctl restart "$SERVICE"

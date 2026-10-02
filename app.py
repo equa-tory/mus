@@ -8,6 +8,7 @@ Then open http://<this-machine-ip>:8000 on phone / PC / TV.
 """
 
 import os
+import re
 import hmac
 import time
 import json
@@ -18,6 +19,7 @@ import asyncio
 import sqlite3
 import threading
 from pathlib import Path
+from datetime import datetime
 
 from fastapi import FastAPI, HTTPException, Body, Request, Depends
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
@@ -51,6 +53,18 @@ DATA_DIR = Path(os.environ.get("DATA_DIR", "./data")).expanduser().resolve()
 ART_DIR = DATA_DIR / "art"
 DB_PATH = DATA_DIR / "library.db"
 STATIC_DIR = Path(__file__).parent / "static"
+
+def _env_num(name: str, default: float) -> float:
+    try:
+        return float(os.environ.get(name, default))
+    except ValueError:
+        return default
+
+# Automatic DB backups: BACKUP_DIR="" disables them, BACKUP_EVERY_HOURS=0 = manual only.
+BACKUP_DIR_RAW = os.environ.get("BACKUP_DIR", "/mnt/backup/mus").strip()
+BACKUP_DIR = Path(BACKUP_DIR_RAW).expanduser() if BACKUP_DIR_RAW else None
+BACKUP_EVERY_HOURS = max(0.0, _env_num("BACKUP_EVERY_HOURS", 48))
+BACKUP_KEEP = max(1, int(_env_num("BACKUP_KEEP", 1)))
 
 AUDIO_EXTS = {".m4a", ".mp3", ".flac", ".aac", ".ogg", ".opus", ".wav"}
 MIME = {
@@ -492,6 +506,137 @@ def scan():
 @app.get("/api/scan/status")
 def scan_status():
     return SCAN
+
+# --- Backups ---------------------------------------------------------------
+# Only library.db is backed up (library index, likes, playlists, history); cover art
+# is rebuilt by a scan. Snapshots go through sqlite's online backup API, so they're
+# consistent while the server is running.
+BACKUP_RE = re.compile(r"^mus-\d{8}-\d{6}\.db$")
+BACKUP_LOCK = threading.Lock()
+BACKUP = {"error": None}
+MAX_UPLOAD = 1 << 30
+
+def _backup_files() -> list[Path]:
+    if not BACKUP_DIR or not BACKUP_DIR.is_dir():
+        return []
+    fs = [p for p in BACKUP_DIR.iterdir() if BACKUP_RE.match(p.name) and p.is_file()]
+    return sorted(fs, key=lambda p: p.name, reverse=True)
+
+def _make_backup() -> Path:
+    if not BACKUP_DIR:
+        raise HTTPException(400, "Backups are disabled (BACKUP_DIR is empty)")
+    with BACKUP_LOCK:
+        try:
+            BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+            final = BACKUP_DIR / datetime.now().strftime("mus-%Y%m%d-%H%M%S.db")
+            tmp = final.with_name(final.name + ".tmp")
+            src = db(); dst = sqlite3.connect(tmp)
+            try:
+                src.backup(dst)
+            finally:
+                dst.close(); src.close()
+            os.replace(tmp, final)
+            for old in _backup_files()[BACKUP_KEEP:]:
+                old.unlink(missing_ok=True)
+            BACKUP["error"] = None
+            return final
+        except Exception as e:
+            BACKUP["error"] = f"{type(e).__name__}: {e}"
+            raise HTTPException(500, f"Backup failed: {e}")
+
+def _backup_loop():
+    while True:
+        wait = 3600.0
+        if BACKUP_DIR and BACKUP_EVERY_HOURS > 0:
+            fs = _backup_files()
+            age = time.time() - fs[0].stat().st_mtime if fs else float("inf")
+            due = BACKUP_EVERY_HOURS * 3600 - age
+            if due <= 0:
+                try:
+                    _make_backup(); fs = _backup_files(); due = BACKUP_EVERY_HOURS * 3600
+                except HTTPException:
+                    due = 3600           # e.g. drive not mounted: retry in an hour
+            wait = min(max(due, 5), 3600)
+        time.sleep(wait)
+threading.Thread(target=_backup_loop, daemon=True).start()
+
+def _restore_from(path: Path):
+    """Validate a sqlite file and copy its contents over the live database."""
+    if SCAN["running"]:
+        raise HTTPException(409, "A scan is running — try again when it finishes")
+    try:
+        src = sqlite3.connect(f"file:{path}?immutable=1", uri=True)
+        try:
+            if src.execute("PRAGMA quick_check").fetchone()[0] != "ok":
+                raise ValueError("integrity check failed")
+            have = {r[0] for r in src.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            if not {"tracks", "playlists", "playlist_tracks", "history"} <= have:
+                raise ValueError("not a mus database")
+        except sqlite3.DatabaseError as e:
+            src.close()
+            raise ValueError(str(e))
+        except ValueError:
+            src.close()
+            raise
+    except ValueError as e:
+        raise HTTPException(400, f"Not a valid backup: {e}")
+    except sqlite3.Error as e:
+        raise HTTPException(400, f"Not a valid backup: {e}")
+    with BACKUP_LOCK:
+        live = db(); keep = sqlite3.connect(DATA_DIR / "pre-restore.db")
+        try:
+            live.backup(keep)               # safety net: what was there before
+            src.backup(live)
+        finally:
+            keep.close(); live.close(); src.close()
+
+def _backup_info(p: Path) -> dict:
+    st = p.stat()
+    return {"name": p.name, "size": st.st_size, "mtime": st.st_mtime}
+
+@app.get("/api/backups", dependencies=OWNER)
+def backups_list():
+    items = [_backup_info(p) for p in _backup_files()]
+    last = items[0]["mtime"] if items else None
+    nxt = last + BACKUP_EVERY_HOURS * 3600 if last and BACKUP_EVERY_HOURS else None
+    return {"enabled": bool(BACKUP_DIR), "dir": str(BACKUP_DIR or ""), "everyHours": BACKUP_EVERY_HOURS,
+            "keep": BACKUP_KEEP, "error": BACKUP["error"], "last": last, "next": nxt, "items": items}
+
+@app.post("/api/backups", dependencies=OWNER)
+def backups_now():
+    return _backup_info(_make_backup())
+
+# declared before /{name} routes so "upload" isn't taken for a backup name
+@app.post("/api/backups/upload", dependencies=OWNER)
+async def backups_upload(request: Request):
+    tmp = DATA_DIR / "upload-restore.tmp"
+    n = 0
+    try:
+        with open(tmp, "wb") as f:
+            async for chunk in request.stream():
+                n += len(chunk)
+                if n > MAX_UPLOAD:
+                    raise HTTPException(413, "File too large")
+                f.write(chunk)
+        await asyncio.to_thread(_restore_from, tmp)
+    finally:
+        tmp.unlink(missing_ok=True)
+    return {"ok": True}
+
+def _named_backup(name: str) -> Path:
+    p = BACKUP_DIR / name if BACKUP_DIR else None
+    if not p or not BACKUP_RE.match(name) or not p.is_file():
+        raise HTTPException(404, "No such backup")
+    return p
+
+@app.get("/api/backups/{name}", dependencies=OWNER)
+def backups_download(name: str):
+    return FileResponse(_named_backup(name), media_type="application/octet-stream", filename=name)
+
+@app.post("/api/backups/{name}/restore", dependencies=OWNER)
+def backups_restore(name: str):
+    _restore_from(_named_backup(name))
+    return {"ok": True}
 
 @app.post("/api/like/{track_id}", dependencies=OWNER)
 def like(track_id: int):

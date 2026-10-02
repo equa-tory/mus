@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, interactive-widget=resizes-content">
 <meta name="theme-color" content="#15120e">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -18,10 +18,12 @@
     --text:#efe7d8; --muted:#9b8e7a; --muted2:#6f6557;
     --accent:#e0a85b; --accent-dim:#b9863f;
     --bar-h:64px; --safe:env(safe-area-inset-bottom,0px); --side-w:420px;
+    --dock-h:0px; --kb:0px; /* phone: height of the bottom tab dock / on-screen keyboard (iOS fallback) */
     --ease:cubic-bezier(.22,.61,.36,1);
   }
   *{box-sizing:border-box}
   html,body{margin:0;height:100%}
+  @supports(height:100dvh){html,body{height:100dvh}}
   body{
     background:var(--bg); color:var(--text); overflow:hidden;
     font:15px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Inter,system-ui,sans-serif;
@@ -34,9 +36,11 @@
 
   /* ---- header ---- */
   header{
-    position:sticky;top:0;z-index:20;display:flex;gap:10px;align-items:center;
-    padding:14px 16px 10px;background:linear-gradient(var(--bg),var(--bg) 70%,transparent);
+    position:sticky;top:0;z-index:20;display:flex;flex-wrap:wrap;gap:0 10px;align-items:center;
+    padding:14px 16px 0;background:var(--bg);
   }
+  header>*{margin-bottom:10px}
+  #searchBtn,#settingsBtn{display:none}
   .brand{display:flex;align-items:center;gap:9px;font-weight:600;letter-spacing:.2px;white-space:nowrap}
   .brand .mark{width:11px;height:20px;border-radius:2px;background:var(--accent);box-shadow:7px 0 0 -3px var(--accent-dim)}
   #search{
@@ -51,8 +55,15 @@
   }
   #scanBtn:hover{color:var(--text);border-color:var(--accent-dim)}
 
+  #searchBtn,#settingsBtn{width:38px;height:38px;place-items:center;border-radius:50%;flex:none;
+    border:1px solid var(--line);background:var(--bg2);color:var(--muted)}
+  #searchBtn.on,#settingsBtn:hover,#searchBtn:hover{color:var(--accent);border-color:var(--accent-dim)}
+  #settingsBtn{display:grid;width:auto;height:auto;padding:9px 12px;border-radius:10px;font-size:13px}
+  #searchBtn svg{width:18px;height:18px}
+  body.guest #settingsBtn{display:none!important}
+
   /* ---- tabs ---- */
-  nav{position:sticky;top:0;z-index:19;display:flex;gap:4px;padding:0 12px 10px;
+  nav{order:9;flex:0 0 calc(100% + 32px);margin:0 -16px;display:flex;gap:4px;padding:0 12px 10px;
     overflow-x:auto;scrollbar-width:none;background:var(--bg)}
   nav::-webkit-scrollbar{display:none}
   nav button{white-space:nowrap;color:var(--muted);padding:7px 12px;border-radius:8px;font-size:13.5px}
@@ -61,7 +72,7 @@
 
   /* ---- list ---- */
   main{position:absolute;inset:0;top:104px;overflow-y:auto;overflow-x:hidden;
-    padding:2px 8px calc(var(--bar-h) + var(--safe) + 20px);overscroll-behavior:contain}
+    padding:2px 8px calc(var(--bar-h) + var(--safe) + var(--dock-h) + 20px);overscroll-behavior:contain}
   .section-title{padding:14px 10px 6px;color:var(--muted);font-size:12px;letter-spacing:.6px;text-transform:uppercase}
   .row{
     display:grid;grid-template-columns:44px 1fr auto auto auto;align-items:center;gap:12px;
@@ -113,8 +124,11 @@
   /* ---- player: collapsed bar ---- */
   #player{position:fixed;left:0;right:0;bottom:0;z-index:30}
   #player.hidden{display:none}
+  /* the wrapper's box spans the phone dock below the bar: let taps through to it */
+  #player{pointer-events:none}
+  #bar,#queuePop,#sleepPop,#sheet{pointer-events:auto}
   #bar{
-    height:var(--bar-h);margin:0 8px;margin-bottom:calc(var(--safe) + 8px);
+    position:relative;height:var(--bar-h);margin:0 8px;margin-bottom:calc(var(--safe) + var(--dock-h) + 8px);
     background:var(--bg2);border:1px solid var(--line);border-radius:14px;
     display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);align-items:center;gap:6px;padding:0 8px 0 9px;
     box-shadow:0 10px 30px rgba(0,0,0,.45);cursor:pointer;
@@ -233,7 +247,7 @@
   .card-foot{display:flex;justify-content:flex-end;gap:10px;margin-top:16px}
   .toggle-line{display:flex;gap:8px;align-items:center;color:var(--muted);font-size:13px;margin-bottom:12px}
 
-  #toast{position:fixed;left:50%;bottom:calc(var(--bar-h) + var(--safe) + 26px);transform:translateX(-50%) translateY(20px);
+  #toast{position:fixed;left:50%;bottom:calc(var(--bar-h) + var(--safe) + var(--dock-h) + 26px);transform:translateX(-50%) translateY(20px);
     background:var(--bg3);border:1px solid var(--line);color:var(--text);padding:10px 16px;border-radius:11px;
     font-size:13.5px;z-index:80;opacity:0;pointer-events:none;transition:.25s var(--ease);box-shadow:0 10px 30px rgba(0,0,0,.5)}
   #toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
@@ -248,7 +262,8 @@
 
   /* view-bar: shuffle-play + track count */
   .view-bar{display:flex;align-items:center;justify-content:space-between;
-    padding:4px 10px 10px}
+    padding:4px 10px 10px;position:sticky;top:0;z-index:5;
+    background:linear-gradient(var(--bg) 78%,transparent)}
   .btn-random{display:flex;align-items:center;gap:7px;background:var(--bg2);
     border:1px solid var(--line);color:var(--text);border-radius:9px;
     padding:8px 14px;font-size:13.5px;font:inherit}
@@ -273,6 +288,29 @@
     #sheet .inner{padding:calc(env(safe-area-inset-top,0px) + 4px) 18px calc(var(--safe) + 18px)}
   }
 
+  /* ---- phone: search/tabs/buttons live in a dock at the bottom, within thumb reach ---- */
+  @media(max-width:640px){
+    :root{--dock-h:52px}
+    header{position:fixed;left:0;right:0;top:auto;bottom:var(--kb);z-index:25;flex-wrap:nowrap;gap:8px;
+      padding:7px 8px calc(var(--safe) + 7px);border-top:1px solid var(--line)}
+    header>*{margin-bottom:0}
+    main{top:env(safe-area-inset-top,0px);padding-top:6px}
+    .brand,#search{display:none}
+    #searchBtn{display:grid;order:0}
+    nav{order:1;flex:1 1 0;min-width:0;margin:0;padding:0}
+    #scanBtn,#settingsBtn,#authBtn{order:2;padding:8px 10px}
+    header.searching #search{display:block;order:1;flex:1}
+    header.searching nav,header.searching #scanBtn,header.searching #settingsBtn,header.searching #authBtn{display:none!important}
+  }
+
+  /* ---- backups modal ---- */
+  .bk-info{color:var(--muted);font-size:13px;margin:2px 0 12px;word-break:break-all}
+  .bk-row{display:flex;align-items:center;gap:8px;padding:8px 0;border-top:1px solid var(--line);font-size:13.5px}
+  .bk-row .nm{flex:1;min-width:0}
+  .bk-row .nm small{display:block;color:var(--muted);font-size:12px}
+  .bk-row a{color:var(--muted);text-decoration:none;padding:6px}
+  .bk-empty{color:var(--muted);padding:10px 0;font-size:13.5px}
+
   /* ---- mini-bar extras ---- */
   #barLike{font-size:16px;color:var(--muted2);width:32px;height:40px;display:grid;place-items:center;border-radius:8px;flex:none}
   #barLike:hover{color:var(--text);background:var(--bg3)}
@@ -287,13 +325,12 @@
   #barQueue,#barMore{font-size:17px;color:var(--muted2);width:32px;height:40px;display:grid;place-items:center;border-radius:8px;flex:none}
   #barQueue:hover,#barMore:hover{color:var(--text);background:var(--bg3)}
   @media(max-width:640px){
-    #barQueue,#barAdd,#barSleep,#barRole{display:none}
-    #barShuffle,#barRepeat{display:none}
+    #barRight,#barShuffle,#barRepeat{display:none}
     #bar{grid-template-columns:minmax(0,1fr) auto}
   }
 
   /* ---- bar queue popover ---- */
-  #queuePop,#sleepPop{position:absolute;right:8px;bottom:calc(var(--bar-h) + var(--safe) + 16px);width:340px;
+  #queuePop,#sleepPop{position:absolute;right:8px;bottom:calc(var(--bar-h) + var(--safe) + var(--dock-h) + 16px);width:340px;
     max-height:min(60vh,420px);background:var(--bg2);border:1px solid var(--line);border-radius:14px;
     box-shadow:0 16px 44px rgba(0,0,0,.55);display:none;flex-direction:column;z-index:45}
   #sleepPop{width:260px}
@@ -365,7 +402,7 @@
       margin:8px -12px 0;padding:0 6px;border-top:1px solid var(--line);overscroll-behavior:contain}
     main,header,nav{transition:right .38s var(--ease),margin-right .38s var(--ease)}
     body.side-mode.side-open main{right:var(--side-w)}
-    body.side-mode.side-open header,body.side-mode.side-open nav{margin-right:var(--side-w)}
+    body.side-mode.side-open header{margin-right:var(--side-w)}
     body.side-open #barQueue{display:none}
   }
 
@@ -377,7 +414,7 @@
   body.guest #scanBtn,body.guest #roleBtn,body.guest #barRole,body.guest #barAdd{display:none!important}
   .auth-err{min-height:18px;margin-top:8px;font-size:13px;color:#e07a5f}
   body.following .ctrl,body.following .transport,body.following .bar-seek,body.following .seek{opacity:.45}
-  #live{display:none;position:fixed;right:16px;bottom:calc(var(--bar-h) + var(--safe) + 24px);z-index:35;width:270px;
+  #live{display:none;position:fixed;right:16px;bottom:calc(var(--bar-h) + var(--safe) + var(--dock-h) + 24px);z-index:35;width:270px;
     background:var(--bg2);border:1px solid var(--line);border-radius:14px;padding:11px 13px;
     box-shadow:0 12px 34px rgba(0,0,0,.5);transition:right .38s var(--ease)}
   body.guest #live{display:block}
@@ -400,11 +437,13 @@
 <body>
   <header>
     <div class="brand"><i class="mark"></i><span>Library</span></div>
+    <button id="searchBtn" title="Search" aria-label="Search"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="8.5" cy="8.5" r="5.5"/><path d="M13 13l4 4"/></svg></button>
     <input id="search" type="search" placeholder="Search title, artist, album" autocomplete="off">
     <button id="scanBtn">Scan</button>
+    <button id="settingsBtn" title="Backups">⚙</button>
     <button id="authBtn"></button>
+    <nav id="tabs"></nav>
   </header>
-  <nav id="tabs"></nav>
   <main id="list"></main>
 
   <section id="player" class="hidden">
@@ -739,6 +778,7 @@ function viewIds(){
 // ---- rendering ----
 const listEl=$("#list");
 function render(){
+  $("#searchBtn").classList.toggle("on",!!S.search);
   // tabs
   const nav=$("#tabs");
   if(!nav.children.length){
@@ -1519,6 +1559,51 @@ function renamePlaylist(p){
     body:JSON.stringify({name:inp.value})}); await loadPlaylists(); m.remove(); render(); };
 }
 
+// ---- backups (owner only; server does the work, see /api/backups) ----
+function backupsModal(){
+  const card=el("div","card"); const m=modal(card);
+  const size=b=>b>=1048576?(b/1048576).toFixed(1)+" MB":Math.max(1,Math.round(b/1024))+" KB";
+  const when=t=>new Date(t*1000).toLocaleString([], {dateStyle:"medium",timeStyle:"short"});
+  const fail=async r=>toast((await r.json().catch(()=>({}))).detail||"Request failed");
+  async function restore(label,send){
+    if(!confirm("Restore "+label+"?\nLikes, playlists and history will be replaced by the backup (the current ones are kept as data/pre-restore.db).")) return;
+    const r=await send(); if(!r.ok) return fail(r);
+    toast("Restored — reloading"); setTimeout(()=>location.reload(),700);
+  }
+  async function paint(){
+    let d; try{ const r=await fetch("api/backups"); if(!r.ok){ m.remove(); return fail(r); } d=await r.json(); }
+    catch(e){ m.remove(); return toast("Couldn't load backups"); }
+    card.innerHTML="<h3>Backups</h3>";
+    const info=el("div","bk-info");
+    info.textContent=!d.enabled?"Backups are disabled (BACKUP_DIR is empty).":
+      (d.everyHours?"Every "+d.everyHours+" h":"Manual only")+" → "+d.dir+" · keeps "+d.keep+
+      (d.next?" · next "+when(d.next):"");
+    card.appendChild(info);
+    if(d.error){ const e=el("div","auth-err"); e.textContent=d.error; card.appendChild(e); }
+    if(!d.items.length){ const e=el("div","bk-empty"); e.textContent="No backups in this folder yet."; card.appendChild(e); }
+    d.items.forEach(b=>{
+      const row=el("div","bk-row"), nm=el("div","nm");
+      nm.textContent=when(b.mtime); const sm=el("small"); sm.textContent=size(b.size); nm.appendChild(sm);
+      const dl=el("a"); dl.textContent="⬇"; dl.title="Download"; dl.href="api/backups/"+b.name; dl.download=b.name;
+      const rb=el("button","btn"); rb.textContent="Restore";
+      rb.onclick=()=>restore(when(b.mtime)+" backup",()=>fetch("api/backups/"+b.name+"/restore",{method:"POST"}));
+      row.append(nm,dl,rb); card.appendChild(row);
+    });
+    const foot=el("div","card-foot");
+    const close=el("button","btn"); close.textContent="Close"; close.onclick=()=>m.remove();
+    const file=el("input"); file.type="file"; file.accept=".db,application/octet-stream"; file.hidden=true;
+    const up=el("button","btn"); up.textContent="Restore from file…"; up.onclick=()=>file.click();
+    file.onchange=()=>{ const f=file.files[0]; if(f) restore("“"+f.name+"”",()=>fetch("api/backups/upload",
+      {method:"POST",headers:{"Content-Type":"application/octet-stream"},body:f})); file.value=""; };
+    const now=el("button","btn accent"); now.textContent="Back up now"; now.disabled=!d.enabled;
+    now.onclick=async()=>{ now.disabled=true; const r=await fetch("api/backups",{method:"POST"});
+      if(!r.ok) await fail(r); else toast("Backup saved"); paint(); };
+    foot.append(close,up,now,file); card.appendChild(foot);
+  }
+  paint();
+}
+$("#settingsBtn").onclick=backupsModal;
+
 // ---- scan ----
 const scanBtn=$("#scanBtn");
 async function doScan(){
@@ -1541,6 +1626,16 @@ scanBtn.onclick=doScan;
 
 // ---- search ----
 let st=null;
+// phone: the search box is a round icon in the bottom dock; it expands on tap and folds back on blur
+{ const hdr=$("header"), inp=$("#search");
+  $("#searchBtn").onclick=()=>{ hdr.classList.add("searching"); inp.focus(); };
+  inp.addEventListener("blur",()=>hdr.classList.remove("searching"));
+  inp.addEventListener("keydown",e=>{ if(e.key==="Enter"||e.key==="Escape") inp.blur(); });
+  // iOS doesn't resize the layout viewport for the keyboard: lift the dock by hand
+  if(window.visualViewport){ const vv=visualViewport, f=()=>document.documentElement.style.setProperty(
+      "--kb",Math.max(0,Math.round(innerHeight-vv.height-vv.offsetTop))+"px");
+    vv.addEventListener("resize",f); vv.addEventListener("scroll",f); }
+}
 $("#search").addEventListener("input",e=>{ clearTimeout(st);
   st=setTimeout(()=>{ S.search=e.target.value; render(); listEl.scrollTop=0; },120); });
 
