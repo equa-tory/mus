@@ -60,7 +60,7 @@
   #searchBtn.on,#settingsBtn:hover,#searchBtn:hover{color:var(--accent);border-color:var(--accent-dim)}
   #settingsBtn{display:grid;width:auto;height:auto;padding:9px 12px;border-radius:10px;font-size:13px}
   #searchBtn svg{width:18px;height:18px}
-  body.guest #settingsBtn{display:none!important}
+  @media(min-width:641px){body.guest #settingsBtn{display:none!important}}
 
   /* ---- tabs ---- */
   nav{order:9;flex:0 0 calc(100% + 32px);margin:0 -16px;display:flex;gap:4px;padding:0 12px 10px;
@@ -298,12 +298,14 @@
     .brand,#search{display:none}
     #searchBtn{display:grid;order:0}
     nav{order:1;flex:1 1 0;min-width:0;margin:0;padding:0}
-    #scanBtn,#settingsBtn,#authBtn{order:2;padding:8px 10px}
+    #scanBtn,#authBtn{display:none!important}   /* Scan / Log in / Log out live in the ⚙ modal on phone */
+    #settingsBtn{order:2;padding:8px 12px;font-size:16px;line-height:1}
     header.searching #search{display:block;order:1;flex:1}
     header.searching nav,header.searching #scanBtn,header.searching #settingsBtn,header.searching #authBtn{display:none!important}
   }
 
   /* ---- backups modal ---- */
+  .bk-acts{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 16px}
   .bk-info{color:var(--muted);font-size:13px;margin:2px 0 12px;word-break:break-all}
   .bk-row{display:flex;align-items:center;gap:8px;padding:8px 0;border-top:1px solid var(--line);font-size:13.5px}
   .bk-row .nm{flex:1;min-width:0}
@@ -1573,7 +1575,9 @@ function backupsModal(){
   async function paint(){
     let d; try{ const r=await fetch("api/backups"); if(!r.ok){ m.remove(); return fail(r); } d=await r.json(); }
     catch(e){ m.remove(); return toast("Couldn't load backups"); }
-    card.innerHTML="<h3>Backups</h3>";
+    card.innerHTML="";
+    if(phoneUI()) card.appendChild(accountButtons(m));
+    card.insertAdjacentHTML("beforeend","<h3>Backups</h3>");
     const info=el("div","bk-info");
     info.textContent=!d.enabled?"Backups are disabled (BACKUP_DIR is empty).":
       (d.everyHours?"Every "+d.everyHours+" h":"Manual only")+" → "+d.dir+" · keeps "+d.keep+
@@ -1602,14 +1606,29 @@ function backupsModal(){
   }
   paint();
 }
-$("#settingsBtn").onclick=backupsModal;
+// phone only: Scan and Log in/out moved out of the dock into this modal
+const phoneUI=()=>matchMedia("(max-width:640px)").matches;
+function accountButtons(m){
+  const row=el("div","bk-acts");
+  if(!S.guest){ const b=el("button","btn"); b.textContent="Scan library"; b.onclick=()=>{ m.remove(); doScan(); }; row.appendChild(b); }
+  if(S.auth.required){ const b=el("button","btn"); b.textContent=S.guest?"🔒 Log in":"Log out";
+    b.onclick=()=>{ m.remove(); S.guest?loginModal():logout(); }; row.appendChild(b); }
+  return row;
+}
+$("#settingsBtn").onclick=()=>{
+  if(!S.guest) return backupsModal();
+  const card=el("div","card"); card.innerHTML="<h3>Listen-only</h3>";
+  const m=modal(card); card.appendChild(accountButtons(m));
+  const foot=el("div","card-foot"), c=el("button","btn"); c.textContent="Close"; c.onclick=()=>m.remove();
+  foot.appendChild(c); card.appendChild(foot);
+};
 
 // ---- scan ----
 const scanBtn=$("#scanBtn");
 async function doScan(){
   if(denyGuest()) return;
   const r=await fetch("api/scan",{method:"POST"});
-  if(r.status===409){ toast("Already scanning…"); }
+  toast(r.status===409?"Already scanning…":"Scanning…");
   scanBtn.disabled=true;
   const poll=setInterval(async()=>{
     const s=await (await fetch("api/scan/status")).json();
