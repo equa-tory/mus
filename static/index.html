@@ -235,7 +235,7 @@
   .scrim{position:fixed;inset:0;z-index:55}
 
   .modal{position:fixed;inset:0;z-index:70;display:grid;place-items:center;background:rgba(0,0,0,.55);padding:20px}
-  .card{background:var(--bg2);border:1px solid var(--line);border-radius:16px;padding:20px;width:100%;max-width:420px}
+  .card{background:var(--bg2);border:1px solid var(--line);border-radius:16px;padding:20px;width:100%;max-width:420px;max-height:calc(100vh - 40px);overflow-y:auto}
   .card h3{margin:0 0 14px;font-size:16px}
   .card input,.card select{width:100%;background:var(--bg);border:1px solid var(--line);color:var(--text);
     border-radius:9px;padding:9px 11px;font-size:14px;outline:none}
@@ -304,7 +304,26 @@
     header.searching nav,header.searching #scanBtn,header.searching #settingsBtn,header.searching #authBtn{display:none!important}
   }
 
+  /* ---- authors ---- */
+  .row.au .art{border-radius:50%}
+  .row.au .like{opacity:1;font-size:19px}
+  .au-head{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:2px 10px 6px;font-size:18px;font-weight:600}
+  .au-head span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .au-head .btn{padding:6px 12px;font-size:13px;font-weight:500;flex:none}
+  #fab{display:none;position:fixed;right:14px;z-index:24;align-items:center;padding:12px 18px;border-radius:999px;
+    background:var(--accent);color:var(--bg);font-weight:600;font-size:14px;box-shadow:0 8px 24px rgba(0,0,0,.5);
+    bottom:calc(var(--kb) + var(--dock-h) + var(--safe) + 14px)}
+  body.has-player #fab{bottom:calc(var(--kb) + var(--dock-h) + var(--safe) + var(--bar-h) + 22px)}
+  #fab:active{opacity:.8}
+  @media(max-width:640px){
+    body.has-fab #fab{display:flex}
+    .btn-random{display:none}
+    .view-bar{position:static;justify-content:flex-start}
+    body.has-fab main{padding-bottom:calc(var(--bar-h) + var(--safe) + var(--dock-h) + 76px)}
+  }
+
   /* ---- backups modal ---- */
+  .card h3.sec{margin-top:20px}
   .bk-acts{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 16px}
   .bk-info{color:var(--muted);font-size:13px;margin:2px 0 12px;word-break:break-all}
   .bk-row{display:flex;align-items:center;gap:8px;padding:8px 0;border-top:1px solid var(--line);font-size:13.5px}
@@ -442,7 +461,7 @@
     <button id="searchBtn" title="Search" aria-label="Search"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="8.5" cy="8.5" r="5.5"/><path d="M13 13l4 4"/></svg></button>
     <input id="search" type="search" placeholder="Search title, artist, album" autocomplete="off">
     <button id="scanBtn">Scan</button>
-    <button id="settingsBtn" title="Backups">⚙</button>
+    <button id="settingsBtn" title="Settings">⚙</button>
     <button id="authBtn"></button>
     <nav id="tabs"></nav>
   </header>
@@ -552,6 +571,7 @@
       <div class="live-btns"><button class="btn accent" id="liveJoin">Listen along</button><button class="btn" id="liveLogin">Log in</button></div>
     </div>
   </div>
+  <button id="fab"></button>
   <div id="toast"></div>
 
 <script>
@@ -569,9 +589,10 @@ const S = {
   volume:0.9, crossfade:4, playing:false,
   sleep:null, _xfading:false, _counted:false, _seeking:false, role:null, _ctrlTime:null, _ctrlTimeAt:null,
   playlists:[], syncPeers:0, hist:[],
+  settings:{authorSep:"/",following:[]}, openAuthor:null, _authors:null,
   auth:{required:false,authed:true}, guest:false, follow:false, live:null, liveOnline:false, _followId:null,
 };
-const TABS = [["library","Library"],["recent","Recently added"],["liked","Liked"],
+const TABS = [["library","Library"],["authors","Authors"],["recent","Recently added"],["liked","Liked"],
               ["most","Most played"],["history","History"],["playlists","Playlists"]];
 const FADE = 0.6;
 const SILENT = "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=";
@@ -700,8 +721,12 @@ function setTitle(e,t){
 async function loadTracks(){
   const r = await fetch("api/tracks"); const arr = await r.json();
   S.byId.clear(); arr.forEach(t=>S.byId.set(t.id,t));
-  S.allIds = arr.map(t=>t.id);
+  S.allIds = arr.map(t=>t.id); S._authors=null;
   render();
+}
+async function loadSettings(){
+  try{ const r=await fetch("api/settings"); if(r.ok) S.settings=await r.json(); }catch(e){}
+  S._authors=null;
 }
 async function loadPlaylists(){
   S.playlists = await (await fetch("api/playlists")).json();
@@ -755,9 +780,40 @@ function smartIds(rules){
   return S.allIds.filter(id=>{ const t=tr(id), res=cs.map(c=>test(t,c));
     return m==="all"?res.every(Boolean):res.some(Boolean); });
 }
+// ---- authors: each track's artist text split on the separator from settings ("a / b" with "/") ----
+const authorKey = n => n.trim().replace(/\s+/g," ").toLowerCase();
+function authorNames(artist){
+  const sep=S.settings.authorSep, name=(artist||"").trim()||"Unknown Artist";
+  const parts=sep?name.split(sep).map(x=>x.trim().replace(/\s+/g," ")).filter(Boolean):[name];
+  return parts.length?parts:[name];
+}
+function authors(){           // Map key -> {key,name,ids,art}; rebuilt after a library or separator change
+  if(S._authors) return S._authors;
+  const map=new Map();
+  S.allIds.forEach(id=>{ const t=tr(id), seen=new Set();
+    authorNames(t.artist).forEach(n=>{ const k=authorKey(n); if(seen.has(k)) return; seen.add(k);
+      let a=map.get(k); if(!a) map.set(k,a={key:k,names:new Map(),ids:[],art:null});
+      a.ids.push(id); a.names.set(n,(a.names.get(n)||0)+1); if(a.art==null&&t.hasArt) a.art=id; }); });
+  map.forEach(a=>{ a.name=[...a.names.entries()].sort((x,y)=>y[1]-x[1])[0][0]; });
+  return S._authors=map;
+}
+const isFollowing = k => S.settings.following.includes(k);
+async function toggleFollow(key){
+  if(denyGuest()) return;
+  const on=!isFollowing(key), a=authors().get(key);
+  const r=await fetch("api/authors/follow",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({key,follow:on})}).catch(()=>null);
+  if(!r||!r.ok){ toast("Couldn’t update following"); return; }
+  S.settings=await r.json();
+  const st=listEl.scrollTop; render(); listEl.scrollTop=st;
+  toast((on?"Following “":"Unfollowed “")+(a?a.name:key)+"”");
+}
+function openAuthor(key){ S.openAuthor=key; S.view="author"; S.search=""; $("#search").value=""; render(); listEl.scrollTop=0; }
+
 function viewIds(){
   let ids;
   switch(S.view){
+    case "author": { const a=authors().get(S.openAuthor); ids=a?a.ids.slice():[]; break; }
     case "recent": ids=[...S.allIds].sort((a,b)=>(tr(b).addedAt||0)-(tr(a).addedAt||0)); break;
     case "liked":  ids=S.allIds.filter(id=>tr(id).liked); break;
     case "most":   ids=S.allIds.filter(id=>tr(id).playCount>0)
@@ -785,18 +841,29 @@ function render(){
   const nav=$("#tabs");
   if(!nav.children.length){
     TABS.forEach(([v,label])=>{ const b=el("button"); b.textContent=label; b.dataset.view=v;
-      b.onclick=()=>{ S.view=v; S.openPlaylist=null; S.search=""; $("#search").value="";
+      b.onclick=()=>{ S.view=v; S.openPlaylist=null; S.openAuthor=null; S.search=""; $("#search").value="";
         if(v==="history") loadHistory().then(render); else render();
         listEl.scrollTop=0; };
       nav.appendChild(b); });
   }
-  [...nav.children].forEach(b=>b.classList.toggle("active", b.dataset.view===S.view && !S.openPlaylist || (S.view==="playlist"&&b.dataset.view==="playlists")));
+  [...nav.children].forEach(b=>b.classList.toggle("active", b.dataset.view===S.view && !S.openPlaylist || (S.view==="playlist"&&b.dataset.view==="playlists") || (S.view==="author"&&b.dataset.view==="authors")));
 
+  document.body.classList.remove("has-fab");     // the phone shuffle button; set again by the views that have one
   if(S.view==="playlists" && !S.openPlaylist){ return renderPlaylistIndex(); }
+  if(S.view==="authors"){ return renderAuthorIndex(); }
+  if(S.view==="author" && !authors().has(S.openAuthor)){ S.view="authors"; S.openAuthor=null; return renderAuthorIndex(); }
 
   const ids = S.listIds = viewIds();
   listEl.innerHTML="";
 
+  if(S.view==="author"){
+    const a=authors().get(S.openAuthor), f=isFollowing(a.key);
+    const back=el("div","backrow"); back.innerHTML="‹ Authors";
+    back.onclick=()=>{ S.openAuthor=null; S.view="authors"; render(); listEl.scrollTop=0; };
+    const head=el("div","au-head"), nm=el("span"), fb=el("button","btn"+(f?" accent":""));
+    nm.textContent=a.name; fb.textContent=f?"★ Following":"☆ Follow"; fb.onclick=()=>toggleFollow(a.key);
+    head.append(nm,fb); listEl.append(back,head);
+  }
   if(S.view==="playlist"){
     const back=el("div","backrow"); back.innerHTML="‹ Playlists";
     back.onclick=()=>{ S.openPlaylist=null; S.view="playlists"; render(); };
@@ -819,7 +886,7 @@ function render(){
   // ---- shuffle-play bar ----
   const vBar=el("div","view-bar");
   const rBtn=el("button","btn-random"); rBtn.innerHTML="⤮&ensp;Shuffle play";
-  rBtn.onclick=()=>shufflePlay(ids);
+  rBtn.onclick=()=>shufflePlay(ids); setFab("Shuffle play",()=>shufflePlay(ids));
   const cnt=el("span","view-count"); cnt.textContent=ids.length+(ids.length===1?" track":" tracks");
   vBar.append(rBtn,cnt); listEl.appendChild(vBar);
 
@@ -855,6 +922,41 @@ function render(){
   listEl.appendChild(frag);
 }
 
+// phone: "Shuffle play" is a floating button at the bottom (thumb reach) instead of the top bar
+const fabBtn=$("#fab");
+function setFab(label,fn){ fabBtn.innerHTML="⤮&ensp;"+label; fabBtn.onclick=fn; document.body.classList.add("has-fab"); }
+function renderAuthorIndex(){
+  listEl.innerHTML="";
+  const q=stripSep(S.search);
+  let list=[...authors().values()];
+  if(q) list=list.filter(a=>stripSep(a.name).includes(q));
+  if(!list.length){
+    const e=el("div","empty"); e.innerHTML=S.allIds.length?"<p>No authors match.</p>":"<h2>No music yet</h2><p>Scan your library to see authors here.</p>";
+    listEl.appendChild(e); return;
+  }
+  const fol=new Set(S.settings.following), byName=(a,b)=>a.name.localeCompare(b.name,undefined,{sensitivity:"base"});
+  const top=list.filter(a=>fol.has(a.key)).sort(byName), rest=list.filter(a=>!fol.has(a.key)).sort(byName);
+  // shuffle: the tracks of followed authors when you follow any, otherwise everything shown
+  const pool=[...new Set((top.length?top:list).flatMap(a=>a.ids))], label=top.length?"Shuffle followed":"Shuffle play";
+  const vBar=el("div","view-bar"), rBtn=el("button","btn-random"), cnt=el("span","view-count");
+  rBtn.innerHTML="⤮&ensp;"+label; rBtn.onclick=()=>shufflePlay(pool); setFab(label,()=>shufflePlay(pool));
+  cnt.textContent=list.length+(list.length===1?" author":" authors"); vBar.append(rBtn,cnt); listEl.appendChild(vBar);
+  const section=(title,arr)=>{
+    if(title){ const h=el("div","section-title"); h.textContent=title; listEl.appendChild(h); }
+    const frag=document.createDocumentFragment();
+    arr.forEach(a=>{
+      const row=el("div","row au"), art=el("div","art"), meta=el("div","meta"), t=el("div","t"), sub=el("div","s");
+      if(a.art!=null){ const im=el("img"); im.loading="lazy"; im.src="api/art/"+a.art; im.onerror=()=>im.remove(); art.appendChild(im); }
+      const ph=el("span","ph"); ph.textContent=a.name.charAt(0).toUpperCase(); art.appendChild(ph);
+      t.textContent=a.name; sub.textContent=a.ids.length+(a.ids.length===1?" track":" tracks"); meta.append(t,sub);
+      const star=el("button","like"+(fol.has(a.key)?" on":"")); star.textContent=fol.has(a.key)?"★":"☆";
+      star.title=fol.has(a.key)?"Unfollow":"Follow"; star.onclick=e=>{ e.stopPropagation(); toggleFollow(a.key); };
+      row.append(art,meta,star); row.onclick=()=>openAuthor(a.key); frag.appendChild(row);
+    });
+    listEl.appendChild(frag);
+  };
+  if(top.length){ section("Following",top); section(rest.length?"All authors":null,rest); } else section(null,rest);
+}
 function renderPlaylistIndex(){
   listEl.innerHTML="";
   const tools=el("div","pl-tools");
@@ -897,7 +999,7 @@ function peekNext(){           // id of next track or null, advancing pos only i
 }
 
 // ---- playback ----
-function showPlayer(){ $("#player").classList.remove("hidden"); }
+function showPlayer(){ $("#player").classList.remove("hidden"); document.body.classList.add("has-player"); }
 function playFrom(ids,i){
   if(followLocked()) return;
   S.queue=ids.slice(); buildOrder(i);
@@ -1134,7 +1236,7 @@ $("#barMore").onclick=e=>{ e.stopPropagation(); const id=currentId(); if(id!=nul
 $("#roleBtn").onclick=()=>{ S.role==="output" ? releaseOutput() : claimOutput(); };
 
 // ---- brand → library ----
-$(".brand").onclick=()=>{ S.view="library"; S.openPlaylist=null; S.search=""; $("#search").value=""; render(); listEl.scrollTop=0; };
+$(".brand").onclick=()=>{ S.view="library"; S.openPlaylist=null; S.openAuthor=null; S.search=""; $("#search").value=""; render(); listEl.scrollTop=0; };
 
 // ---- swipe-down to collapse sheet ----
 { let sy=null,sx=null;
@@ -1577,7 +1679,20 @@ function backupsModal(){
     catch(e){ m.remove(); return toast("Couldn't load backups"); }
     card.innerHTML="";
     if(phoneUI()) card.appendChild(accountButtons(m));
-    card.insertAdjacentHTML("beforeend","<h3>Backups</h3>");
+    card.insertAdjacentHTML("beforeend","<h3>Authors</h3>");
+    const ainfo=el("div","bk-info");
+    ainfo.textContent="Text that separates several authors in one artist, e.g. “/” turns “name1 / name2” into two authors. A few characters are fine; empty keeps each artist as one author.";
+    const arow=el("div","bk-acts"), ain=el("input"), asave=el("button","btn");
+    ain.value=S.settings.authorSep; ain.placeholder="e.g. /"; ain.maxLength=20; ain.style.flex="1";
+    asave.textContent="Save";
+    asave.onclick=async()=>{
+      const r=await fetch("api/settings",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({authorSep:ain.value})});
+      if(!r.ok) return fail(r);
+      S.settings=await r.json(); S._authors=null; if(S.view==="authors"||S.view==="author") render(); toast("Authors updated");
+    };
+    ain.addEventListener("keydown",e=>{ if(e.key==="Enter") asave.click(); });
+    arow.append(ain,asave); card.append(ainfo,arow);
+    card.insertAdjacentHTML("beforeend",'<h3 class="sec">Backups</h3>');
     const info=el("div","bk-info");
     info.textContent=!d.enabled?"Backups are disabled (BACKUP_DIR is empty).":
       (d.everyHours?"Every "+d.everyHours+" h":"Manual only")+" → "+d.dir+" · keeps "+d.keep+
@@ -2124,7 +2239,7 @@ async function initAuth(){
 // Load the library and restore local playback state first, then connect to
 // the sync channel — connecting too early would let a device apply synced
 // state (and possibly play audio) before it even knows what track ids exist.
-(async()=>{ await initAuth(); await loadTracks(); await loadPlaylists(); restore(); connectSync(); if(sideActive()) expand(); })();
+(async()=>{ await initAuth(); await loadSettings(); await loadTracks(); await loadPlaylists(); restore(); connectSync(); if(sideActive()) expand(); })();
 })();
 </script>
 </body>

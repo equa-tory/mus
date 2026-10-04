@@ -638,6 +638,47 @@ def backups_restore(name: str):
     _restore_from(_named_backup(name))
     return {"ok": True}
 
+# --- Settings (stored in the meta table, so they sync across devices and are backed up) ---
+# authorSep: text that splits a track's artist into several authors ("a / b" with "/").
+# following: lower-cased author keys pinned to the top of the Authors tab.
+DEFAULT_AUTHOR_SEP = "/"
+_SETTINGS_LOCK = threading.Lock()
+
+def _read_settings(c) -> dict:
+    m = {r["key"]: r["value"] for r in c.execute(
+        "SELECT key,value FROM meta WHERE key IN ('author_sep','following')")}
+    try:
+        following = [k for k in json.loads(m.get("following") or "[]") if isinstance(k, str)]
+    except ValueError:
+        following = []
+    return {"authorSep": m.get("author_sep", DEFAULT_AUTHOR_SEP), "following": following}
+
+@app.get("/api/settings")
+def get_settings():
+    with db() as c:
+        return _read_settings(c)
+
+@app.put("/api/settings", dependencies=OWNER)
+def put_settings(body: dict = Body(...)):
+    sep = body.get("authorSep")
+    if not isinstance(sep, str) or len(sep.strip()) > 20:
+        raise HTTPException(400, "authorSep must be text of up to 20 characters")
+    with _SETTINGS_LOCK, db() as c:
+        c.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('author_sep',?)", (sep.strip(),))
+        return _read_settings(c)
+
+@app.post("/api/authors/follow", dependencies=OWNER)
+def follow_author(body: dict = Body(...)):
+    key, on = body.get("key"), body.get("follow")
+    if not isinstance(key, str) or not key.strip() or len(key) > 300 or not isinstance(on, bool):
+        raise HTTPException(400, "Need key (text) and follow (true/false)")
+    key = key.strip().lower()
+    with _SETTINGS_LOCK, db() as c:
+        cur = _read_settings(c)["following"]
+        nxt = [k for k in cur if k != key] + ([key] if on else [])
+        c.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('following',?)", (json.dumps(nxt),))
+        return _read_settings(c)
+
 @app.post("/api/like/{track_id}", dependencies=OWNER)
 def like(track_id: int):
     with db() as c:

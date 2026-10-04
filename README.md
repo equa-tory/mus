@@ -33,3 +33,7 @@ locally, which is never saved to the server.
 ## Backups
 
 The database (library index, likes, playlists, history) is backed up automatically: by default every 48 h into `/mnt/backup/mus`, keeping the newest 1. Override in `.env` (see `.env.example`): `BACKUP_DIR` (empty = off), `BACKUP_EVERY_HOURS` (`0` = manual only), `BACKUP_KEEP`. The ⚙ button in the header lists the backups and lets you download or restore one, restore from an uploaded file, or back up right now. Cover art isn't included — a scan rebuilds it. Make sure the service user can write to the backup folder (`install.sh` creates the default one).
+
+## Authors
+
+The **Authors** tab groups tracks by artist. If one artist field holds several names (e.g. `name1 / name2`), set the separator under ⚙ Settings → Authors (default `/`, a few characters are fine) and each name becomes its own author. Tap ★ to follow an author — followed authors are listed first. Inside an author, Shuffle play plays a random mix of their tracks (on phones it's the floating button at the bottom).
