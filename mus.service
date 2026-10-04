@@ -12,7 +12,11 @@ Environment="MUSIC_DIR=@MUSIC_DIR@"
 Environment="DATA_DIR=@DIR@/data"
 Environment=PYTHONUNBUFFERED=1
 
-ExecStart="@DIR@/venv/bin/uvicorn" app:app --host 0.0.0.0 --port @PORT@
+# Browsers keep /api/sync/events (an endless SSE stream) open, and uvicorn waits for every open
+# connection on shutdown - forever by default, so systemd had to SIGKILL it after 90 s.
+# Give open connections 3 s, then drop them; TimeoutStopSec is only a backstop.
+ExecStart="@DIR@/venv/bin/uvicorn" app:app --host 0.0.0.0 --port @PORT@ --timeout-graceful-shutdown 3
+TimeoutStopSec=15
 
 Restart=on-failure
 RestartSec=5
