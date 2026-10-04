@@ -48,6 +48,12 @@ _load_dotenv(Path(__file__).parent / ".env")
 # PASSWORD (env or .env): when set, only people who enter it can change anything;
 # everyone else is a read-only listener. Empty/unset = no login, everyone is an owner.
 PASSWORD = os.environ.get("PASSWORD", "")
+# REQUIRE_LOGIN (env or .env): true/1/yes/on + a PASSWORD = nobody gets past a login page (and no API
+# read works) until they enter it. Unset/false = the guest-listening mode described above.
+REQUIRE_LOGIN = os.environ.get("REQUIRE_LOGIN", "").strip().lower() in ("1", "true", "yes", "on")
+if REQUIRE_LOGIN and not PASSWORD:
+    print("WARNING: REQUIRE_LOGIN is set but PASSWORD is empty - ignoring REQUIRE_LOGIN")
+    REQUIRE_LOGIN = False
 MUSIC_DIR = Path(os.environ.get("MUSIC_DIR", "./music")).expanduser().resolve()
 DATA_DIR = Path(os.environ.get("DATA_DIR", "./data")).expanduser().resolve()
 ART_DIR = DATA_DIR / "art"
@@ -297,7 +303,15 @@ def _scan_worker():
         SCAN["finished_at"] = time.time()
 
 # --- App -------------------------------------------------------------------
-app = FastAPI(title="Music")
+_OPEN_API = {"/api/auth", "/api/login", "/api/logout"}
+
+def login_gate(request: Request):
+    """REQUIRE_LOGIN: every API route (reads included) needs the cookie, except login itself."""
+    path = request.url.path
+    if REQUIRE_LOGIN and path.startswith("/api/") and path not in _OPEN_API and not _is_owner(request):
+        raise HTTPException(401, "Log in first")
+
+app = FastAPI(title="Music", dependencies=[Depends(login_gate)])
 init_db()
 
 def track_dict(r: sqlite3.Row):
@@ -894,4 +908,18 @@ def sync_leave(body: dict = Body(...)):
     return {"ok": True}
 
 # Serve the single-page frontend (declared last so /api/* wins).
+def _page(request: Request):
+    # with REQUIRE_LOGIN the library page itself is withheld: visitors get the login page instead
+    if REQUIRE_LOGIN and not _is_owner(request):
+        return FileResponse(STATIC_DIR / "login.html", headers={"Cache-Control": "no-store"})
+    return FileResponse(STATIC_DIR / "index.html")
+
+@app.get("/", include_in_schema=False)
+def page_root(request: Request):
+    return _page(request)
+
+@app.get("/index.html", include_in_schema=False)
+def page_index(request: Request):
+    return _page(request)
+
 app.mount("/", StaticFiles(directory=str(STATIC_DIR), html=True), name="static")

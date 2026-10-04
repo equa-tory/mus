@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#15120e">
+<link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png">
+<link rel="manifest" href="/manifest.json">
+<title>Log in</title>
+<style>
+  :root{--bg:#15120e;--bg2:#1d1813;--line:#2e2820;--text:#efe7d8;--muted:#9b8e7a;--accent:#e0a85b;--accent-dim:#b9863f}
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{background:var(--bg);color:var(--text);display:grid;place-items:center;padding:20px;
+    font:15px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Inter,system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+  form{width:100%;max-width:340px;background:var(--bg2);border:1px solid var(--line);border-radius:16px;padding:24px}
+  .brand{display:flex;align-items:center;gap:9px;font-weight:600;letter-spacing:.2px;margin-bottom:18px}
+  .mark{width:11px;height:20px;border-radius:2px;background:var(--accent);box-shadow:7px 0 0 -3px var(--accent-dim)}
+  input{width:100%;background:var(--bg);border:1px solid var(--line);color:var(--text);border-radius:10px;
+    padding:11px 12px;font-size:16px;outline:none}
+  input:focus{border-color:var(--accent-dim)}
+  button{width:100%;margin-top:12px;background:var(--accent);color:var(--bg);border:0;border-radius:10px;
+    padding:11px;font:inherit;font-weight:600;cursor:pointer}
+  button:disabled{opacity:.5;cursor:default}
+  .err{min-height:18px;margin-top:10px;font-size:13px;color:#e07a5f}
+</style>
+</head>
+<body>
+<form id="f">
+  <div class="brand"><i class="mark"></i><span>Library</span></div>
+  <input id="pw" type="password" placeholder="Password" autocomplete="current-password" autofocus>
+  <div class="err" id="err" role="alert"></div>
+  <button id="go">Log in</button>
+</form>
+<script>
+const f=document.getElementById("f"), pw=document.getElementById("pw"), err=document.getElementById("err"), go=document.getElementById("go");
+f.addEventListener("submit",async e=>{
+  e.preventDefault(); err.textContent=""; go.disabled=true;
+  const r=await fetch("api/login",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({password:pw.value})}).catch(()=>null);
+  if(r&&r.ok){ location.reload(); return; }
+  go.disabled=false;
+  err.textContent=!r?"Can’t reach the server":r.status===429?"Too many attempts — try again in a few minutes":"Wrong password";
+  pw.select();
+});
+</script>
+</body>
+</html>
