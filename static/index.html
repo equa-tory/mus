@@ -138,6 +138,10 @@
   #barLeft{display:flex;align-items:center;gap:9px;min-width:0}
   #barArt{width:46px;height:46px;border-radius:8px;object-fit:cover;background:var(--bg3);flex:none}
   #barMeta{min-width:0}
+  .ttl-row{display:flex;align-items:baseline;gap:6px;min-width:0}
+  .ttl-row>div{min-width:0}
+  a.yt{flex:none;color:var(--muted2);text-decoration:none;font-size:.9em;line-height:1}
+  a.yt:hover{color:var(--accent)}
   #barTitle{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:500;font-size:14px}
   #barArtist{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--muted);font-size:12.5px}
   #barRight{display:flex;align-items:center;gap:2px;justify-content:flex-end;min-width:0}
@@ -474,7 +478,7 @@
     <div id="bar">
       <div id="barLeft">
         <img id="barArt" alt="">
-        <div id="barMeta"><div id="barTitle"></div><div id="barArtist"></div></div>
+        <div id="barMeta"><div class="ttl-row"><div id="barTitle"></div><a class="yt" id="barYt" target="_blank" rel="noopener noreferrer" title="Search on YouTube">↗</a></div><div id="barArtist"></div></div>
       </div>
       <div class="bar-mid">
         <div class="ctrl">
@@ -526,7 +530,7 @@
         </div>
         <div id="sheetArtWrap"><img id="sheetArt" alt=""></div>
         <div class="np-meta">
-          <div id="npTitle"></div>
+          <div class="ttl-row"><div id="npTitle"></div><a class="yt" id="npYt" target="_blank" rel="noopener noreferrer" title="Search on YouTube">↗</a></div>
           <div id="npArtist"></div>
         </div>
         <div class="seek">
@@ -1038,6 +1042,9 @@ function transitionTo(id, dur){
 }
 function onTrackChanged(id){
   const t=tr(id); if(!t) return;
+  const yt="https://www.youtube.com/results?search_query="+encodeURIComponent(
+    [t.title,/^unknown artist$/i.test(t.artist||"")?"":t.artist].filter(Boolean).join(" - "));
+  $("#barYt").href=$("#npYt").href=yt;
   const artUrl = t.hasArt ? "api/art/"+id : "";
   setTitle($("#barTitle"),t); $("#barArtist").textContent=t.artist;
   setTitle($("#npTitle"),t); $("#npArtist").textContent=t.artist+(t.album?" · "+t.album:"");
@@ -1181,7 +1188,7 @@ function expand(){
 function collapse(){ sheetEl.classList.remove("open"); document.body.classList.remove("side-open"); closePanels(); }
 // the bar is the tap target that opens the player; its own controls never do
 $("#bar").addEventListener("click",e=>{
-  if(e.target.closest(".ctrl,.bar-seek,#barRight")) return;
+  if(e.target.closest(".ctrl,.bar-seek,#barRight,a.yt")) return;
   if(sideActive()&&sheetOpen()) collapse(); else expand();
 });
 sideMql.addEventListener("change",()=>{
