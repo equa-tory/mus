@@ -54,6 +54,13 @@ REQUIRE_LOGIN = os.environ.get("REQUIRE_LOGIN", "").strip().lower() in ("1", "tr
 if REQUIRE_LOGIN and not PASSWORD:
     print("WARNING: REQUIRE_LOGIN is set but PASSWORD is empty - ignoring REQUIRE_LOGIN")
     REQUIRE_LOGIN = False
+# LISTEN_ONLY (env or .env): true/1/yes/on + a PASSWORD = visitors without the password can only listen
+# along with whatever the owner plays (no picking songs, no local playback). It is a UI restriction:
+# /api/stream stays readable, as in the plain guest mode.
+LISTEN_ONLY = os.environ.get("LISTEN_ONLY", "").strip().lower() in ("1", "true", "yes", "on")
+if LISTEN_ONLY and not PASSWORD:
+    print("WARNING: LISTEN_ONLY is set but PASSWORD is empty - ignoring LISTEN_ONLY")
+    LISTEN_ONLY = False
 MUSIC_DIR = Path(os.environ.get("MUSIC_DIR", "./music")).expanduser().resolve()
 DATA_DIR = Path(os.environ.get("DATA_DIR", "./data")).expanduser().resolve()
 ART_DIR = DATA_DIR / "art"
@@ -475,7 +482,7 @@ def art(track_id: int):
 
 @app.get("/api/auth")
 def auth_status(request: Request):
-    return {"required": bool(PASSWORD), "authed": _is_owner(request)}
+    return {"required": bool(PASSWORD), "authed": _is_owner(request), "listenOnly": LISTEN_ONLY}
 
 @app.post("/api/login")
 def login(request: Request, response: Response, body: dict = Body(...)):

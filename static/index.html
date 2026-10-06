@@ -446,6 +446,7 @@
     background:var(--bg2);border:1px solid var(--line);border-radius:14px;padding:11px 13px;
     box-shadow:0 12px 34px rgba(0,0,0,.5);transition:right .38s var(--ease)}
   body.guest #live{display:block}
+  body.listen-only #liveJoin{display:none}
   .live-head{display:flex;align-items:center;gap:8px;font-size:12px;letter-spacing:.4px;text-transform:uppercase;color:var(--muted)}
   .live-head span{flex:1}
   .live-head button{color:var(--muted);width:22px;height:22px;border-radius:6px;line-height:1}
@@ -719,7 +720,8 @@ const tr = id => S.byId.get(id);
 // owner, but the server rejects every write (and this UI says so instead of trying).
 function denyGuest(){ if(!S.guest) return false; toast("Listen-only — log in to change things"); return true; }
 // while listening along, playback is driven by the owner's published state, not by this device
-function followLocked(){ if(!S.follow) return false; toast("Listening along — tap Stop to take control"); return true; }
+function followLocked(){ if(!S.follow) return false;
+  toast(S.listenOnly?"Listen-only — you’re listening along with the owner":"Listening along — tap Stop to take control"); return true; }
 // set a title element's text, plus the little ALAC tag for tracks served via live transcode
 function setTitle(e,t){
   e.textContent=t.title;
@@ -2180,11 +2182,12 @@ function followApply(st){
   } finally { _applyingSync=false; }
 }
 function startFollow(){
-  if(!S.live||S.live.id==null||!S.liveOnline) return;
+  if(!S.listenOnly&&(!S.live||S.live.id==null||!S.liveOnline)) return;   // listen-only: follow even before the owner plays
   S.follow=true; S._followId=null; document.body.classList.add("following");
   followApply(S.live); renderLive();
 }
 function stopFollow(){
+  if(S.listenOnly) return;
   S.follow=false; document.body.classList.remove("following");
   const a=cur(); S.playing=false; a.pause(); updatePlay(); markPlayingRow(currentId()); persist();
   renderLive(); toast("Stopped listening along");
@@ -2195,7 +2198,7 @@ function guestSyncMsg(msg){
   if(msg.type==="hello"&&!S._guestBooted){
     S._guestBooted=true;
     // default for a guest: tune in to whatever the owner is playing right now
-    if(S.liveOnline&&S.live) startFollow();
+    if(S.listenOnly||(S.liveOnline&&S.live)) startFollow();
     else if(S._resume){ loadAt(S._resume.id,S._resume.time,false); }
     S._resume=null;
   } else if(S.follow){
@@ -2238,6 +2241,8 @@ async function initAuth(){
   try{ S.auth=await (await fetch("api/auth")).json(); }catch(e){}
   S.guest=!!(S.auth.required&&!S.auth.authed);
   if(S.guest) S.role="output";       // local-only player, see above
+  S.listenOnly=S.guest&&!!S.auth.listenOnly;   // guests may only follow the owner, never pick or control
+  document.body.classList.toggle("listen-only",S.listenOnly);
   document.body.classList.toggle("guest",S.guest);
   document.body.classList.toggle("auth-on",!!S.auth.required);
   $("#authBtn").textContent=S.guest?"🔒 Log in":"Log out";

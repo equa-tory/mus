@@ -26,6 +26,8 @@ PASSWORD=your-password
 No username. With no `PASSWORD` line (or an empty one) there is no login and everyone can do everything.
 
 To make the login mandatory — a login page before anything else, no guest browsing or listening — add `REQUIRE_LOGIN=true` next to it. Without that line (or with `false`) visitors can still listen as guests.
+
+For a third mode, add `LISTEN_ONLY=true` (also needs `PASSWORD`): visitors without the password can *only* listen along with what you play — no picking songs, skipping, seeking or playing locally, and no Stop button. It is a UI restriction; the audio endpoints stay readable.
 With one set, anyone can open the site and play any song, but only people who enter the password
 (🔒 Log in, top right) can change anything — likes, playlists, scan, output/remote control. Visitors who
 haven't logged in get a small corner panel that starts out **listening along** with whatever you're
