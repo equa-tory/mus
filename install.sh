@@ -9,6 +9,7 @@
 #   --music DIR    music folder to serve      (env MUSIC_DIR, default ~/Music)
 #   --port N       listen port                (env PORT, default 8881)
 #   --no-service   set up the venv only; don't touch systemd
+#   --no-deno      don't install Deno (the YouTube music downloader needs a JS runtime: Deno 2.3+/Node 22+)
 #   --dry-run      print what would be done, change nothing
 #   -y, --yes      never prompt
 set -euo pipefail
@@ -20,13 +21,14 @@ MUSIC_DIR=${MUSIC_DIR:-}
 PORT=${PORT:-8881}
 SERVICE=mus
 UNIT_PATH=/etc/systemd/system/$SERVICE.service
-WANT_SERVICE=1 DRY=0 YES=0
+WANT_SERVICE=1 DRY=0 YES=0 NO_DENO=0
 
 while [[ $# -gt 0 ]]; do
   case $1 in
     --music) MUSIC_DIR=${2:?--music needs a value}; shift 2 ;;
     --port) PORT=${2:?--port needs a value}; shift 2 ;;
     --no-service) WANT_SERVICE=0; shift ;;
+    --no-deno) NO_DENO=1; shift ;;
     --dry-run) DRY=1; shift ;;
     -y|--yes) YES=1; shift ;;
     -h|--help) sed -n '2,/^set -e/{/^set -e/!p}' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
@@ -81,6 +83,50 @@ say "Setting up virtualenv + Python dependencies"
 [[ -x venv/bin/python ]] || run python3 -m venv venv
 run venv/bin/pip install -q --upgrade pip || warn "could not upgrade pip (offline?) — continuing"
 run venv/bin/pip install -q -r requirements.txt
+
+# ---- JavaScript runtime for yt-dlp (only the "Download music" feature needs it) ----
+# yt-dlp silently ignores a runtime older than these, and every download then fails at
+# YouTube's challenge step - a distro Node 18 is the classic case.
+ver_ge() { [[ -n $1 ]] && [[ $(printf '%s\n%s\n' "$2" "$1" | sort -V | head -n1) == "$2" ]]; }
+exe_ver() { "$1" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1 || true; }
+have_js_runtime() {
+  local p
+  for p in "$APP_DIR/.deno/bin/deno" "$(command -v deno || true)"; do
+    [[ -n $p && -x $p ]] && ver_ge "$(exe_ver "$p")" 2.3.0 && return 0
+  done
+  p=$(command -v bun || true);  [[ -n $p && -x $p ]] && ver_ge "$(exe_ver "$p")" 1.2.11 && return 0
+  p=$(command -v node || true); [[ -n $p && -x $p ]] && ver_ge "$(exe_ver "$p")" 22.0.0 && return 0
+  return 1
+}
+if ((DRY)); then
+  say "(dry run) would check for a JS runtime and install Deno into $APP_DIR/.deno if needed"
+elif have_js_runtime; then
+  say "JavaScript runtime for yt-dlp: OK"
+elif ((NO_DENO)); then
+  warn "No JS runtime (Deno 2.3+ / Node 22+) - --no-deno given; the music downloader won't work until you install one."
+else
+  say "No JavaScript runtime new enough for yt-dlp - installing Deno into $APP_DIR/.deno (no root needed)"
+  ans=y
+  if ((!YES)) && [[ -t 0 ]]; then read -r -p "Install Deno? [Y/n] " ans || ans=y; fi
+  if [[ ${ans:-y} =~ ^[Yy] ]]; then
+    command -v unzip >/dev/null || warn "unzip is missing (the Deno installer needs it): sudo apt install unzip"
+    tmp=$(mktemp)
+    if curl -fsSL https://deno.land/install.sh -o "$tmp" && DENO_INSTALL="$APP_DIR/.deno" sh "$tmp" --no-modify-path </dev/null >/dev/null 2>&1; then
+      have_js_runtime && say "Deno installed" || warn "Deno installed but isn't new enough? Check $APP_DIR/.deno/bin/deno --version"
+    else
+      warn "Couldn't install Deno - the music downloader won't work until Deno 2.3+ (or Node 22+) is installed."
+    fi
+    rm -f "$tmp"
+  fi
+fi
+
+# ---- download folder (⚙ → Download music; override with DOWNLOAD_DIR in .env) ----
+DL=${DOWNLOAD_DIR-/mnt/videos/Loop}
+if [[ -n $DL && ! -d $DL ]]; then
+  say "Creating the download folder $DL"
+  run mkdir -p "$DL" 2>/dev/null || run $SUDO mkdir -p "$DL" || warn "could not create $DL - the downloader will say so until it exists"
+  [[ -d $DL && ! -w $DL ]] && run $SUDO chown "$SVC_USER" "$DL" || true
+fi
 
 if ((!WANT_SERVICE)); then
   say "Done (no service). Run it with:"

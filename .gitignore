@@ -180,3 +180,7 @@ cython_debug/
 #  refer to https://docs.cursor.com/context/ignore-files
 .cursorignore
 .cursorindexingignore
+
+# YouTube music downloader: saved cookies (secret) + Deno runtime installed by install.sh
+data/ytdl/
+.deno/

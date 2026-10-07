@@ -41,3 +41,12 @@ The database (library index, likes, playlists, history) is backed up automatical
 ## Authors
 
 The **Authors** tab groups tracks by artist. If one artist field holds several names (e.g. `name1 / name2`), set the separator under ⚙ Settings → Authors (default `/`, a few characters are fine) and each name becomes its own author. Tap ★ to follow an author — followed authors are listed first. Inside an author, Shuffle play plays a random mix of their tracks (on phones it's the floating button at the bottom).
+
+## Download music from YouTube
+
+⚙ Settings → **Download music → Download from YouTube…** (owner only). Save a playlist link, press **Fetch list**, and every song gets a status: *new*, *in folder* / *downloaded* (already saved), *in library* (mus already has it), *skipped* or *unavailable*. Tick the songs you want and press **Download**; or tick many and press **Skip selected** to hide them for good (shift-click selects a range, "Select all new", and a from–to position range help with long playlists; **Un-skip** brings them back).
+
+Songs are saved as `.m4a` with the cover embedded and **artist / album / title** tags filled in — from YouTube Music's own data when it has it (several artists joined with ` / `), otherwise from an `Artist - Title` video name or the channel name. They go flat into the download folder (default `/mnt/videos/Loop`, change with `DOWNLOAD_DIR` in `.env`), **not** into the music folder; move them over yourself and run Scan.
+
+YouTube needs your login cookies to allow downloads: the dialog has a box to paste them (and a short how-to — use a private window so YouTube doesn't rotate them). They're stored on the server only, and mus tells you when they've expired or stopped working. `./install.sh` also installs Deno (needed by yt-dlp to solve YouTube's challenge) into `./.deno`; update yt-dlp itself from the dialog when downloads start failing. Tests: `venv/bin/python -m unittest test_ytdl`.
+

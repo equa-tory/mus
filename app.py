@@ -74,6 +74,9 @@ def _env_num(name: str, default: float) -> float:
         return default
 
 # Automatic DB backups: BACKUP_DIR="" disables them, BACKUP_EVERY_HOURS=0 = manual only.
+# Where the YouTube downloader (⚙ → Download music) saves songs: a flat folder of .m4a files,
+# deliberately NOT the music folder -- you move what you like into it yourself.
+DOWNLOAD_DIR = Path(os.environ.get("DOWNLOAD_DIR", "/mnt/videos/Loop")).expanduser()
 BACKUP_DIR_RAW = os.environ.get("BACKUP_DIR", "/mnt/ssd/backups/mus").strip()
 BACKUP_DIR = Path(BACKUP_DIR_RAW).expanduser() if BACKUP_DIR_RAW else None
 BACKUP_EVERY_HOURS = max(0.0, _env_num("BACKUP_EVERY_HOURS", 48))
@@ -320,6 +323,8 @@ def login_gate(request: Request):
 
 app = FastAPI(title="Music", dependencies=[Depends(login_gate)])
 init_db()
+import ytdl                                   # noqa: E402  (needs init_db's connection helper)
+ytdl.init(DATA_DIR, DOWNLOAD_DIR, db)
 
 def track_dict(r: sqlite3.Row):
     return {
@@ -699,6 +704,90 @@ def follow_author(body: dict = Body(...)):
         nxt = [k for k in cur if k != key] + ([key] if on else [])
         c.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('following',?)", (json.dumps(nxt),))
         return _read_settings(c)
+
+# --- Download music from YouTube (owner only; logic in ytdl.py) ----------------
+def _dl(fn, *a, **kw):
+    """Run a ytdl call, turning its ValueError/LookupError into 400/404."""
+    try:
+        return fn(*a, **kw)
+    except LookupError as e:
+        raise HTTPException(404, str(e))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+def _ids(body) -> list[str]:
+    ids = body.get("ids")
+    if not isinstance(ids, list) or not all(isinstance(i, str) for i in ids) or len(ids) > ytdl.MAX_IDS:
+        raise HTTPException(400, "ids must be a list of video ids")
+    return ids
+
+@app.get("/api/dl/tools", dependencies=OWNER)
+def dl_tools():
+    return ytdl.tools_state()
+
+@app.post("/api/dl/cookies", dependencies=OWNER)
+def dl_cookies(body: dict = Body(...)):
+    if body.get("action") == "clear":
+        ytdl.clear_cookies()
+    else:
+        _dl(ytdl.save_cookies, body.get("text", ""))
+        ytdl.check_cookies_async()           # say soon if they don't work
+    return {"ok": True, "cookies": ytdl.cookie_status()}
+
+@app.post("/api/dl/cookies/check", dependencies=OWNER)
+def dl_cookies_check():
+    ytdl.check_cookies_async()
+    return {"ok": True}
+
+@app.post("/api/dl/update", dependencies=OWNER)
+def dl_update():
+    if not ytdl.start_update():
+        raise HTTPException(409, "An update is already running")
+    return {"ok": True}
+
+@app.post("/api/dl/sources", dependencies=OWNER)
+def dl_add_source(body: dict = Body(...)):
+    sid = _dl(ytdl.add_source, body.get("url", ""), body.get("name", ""))
+    return {"ok": True, "id": sid, "sources": ytdl.list_sources()}
+
+@app.delete("/api/dl/sources/{sid}", dependencies=OWNER)
+def dl_delete_source(sid: int):
+    _dl(ytdl.delete_source, sid)
+    return {"ok": True, "sources": ytdl.list_sources()}
+
+@app.get("/api/dl/sources/{sid}", dependencies=OWNER)
+def dl_source(sid: int):
+    return _dl(ytdl.source_state, sid)
+
+@app.post("/api/dl/sources/{sid}/fetch", dependencies=OWNER)
+def dl_fetch(sid: int):
+    _dl(ytdl.fetch_source, sid)
+    return _dl(ytdl.source_state, sid)
+
+@app.post("/api/dl/sources/{sid}/skip", dependencies=OWNER)
+def dl_skip(sid: int, body: dict = Body(...)):
+    _dl(ytdl.mark, sid, _ids(body), True)
+    return _dl(ytdl.source_state, sid)
+
+@app.post("/api/dl/sources/{sid}/unskip", dependencies=OWNER)
+def dl_unskip(sid: int, body: dict = Body(...)):
+    _dl(ytdl.mark, sid, _ids(body), False)
+    return _dl(ytdl.source_state, sid)
+
+@app.post("/api/dl/sources/{sid}/start", dependencies=OWNER)
+def dl_start(sid: int, body: dict = Body(...)):
+    ok, err = _dl(ytdl.start_job, sid, _ids(body))
+    if not ok:
+        raise HTTPException(409 if "already running" in err else 400, err)
+    return {"ok": True, "job": ytdl.job_state()}
+
+@app.get("/api/dl/job", dependencies=OWNER)
+def dl_job():
+    return {"job": ytdl.job_state()}
+
+@app.post("/api/dl/job/cancel", dependencies=OWNER)
+def dl_cancel():
+    return {"ok": ytdl.cancel_job(), "job": ytdl.job_state()}
 
 @app.post("/api/like/{track_id}", dependencies=OWNER)
 def like(track_id: int):

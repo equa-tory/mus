@@ -339,6 +339,52 @@
   .bk-row a{color:var(--muted);text-decoration:none;padding:6px}
   .bk-empty{color:var(--muted);padding:10px 0;font-size:13.5px}
 
+  /* ---- download music modal (⚙ → Download music) ---- */
+  .card.dl{max-width:760px;padding-bottom:0}
+  .dl-head{display:flex;align-items:center;gap:8px;margin-bottom:10px}
+  .dl-head h3{margin:0;flex:1}
+  .dl-warn{border:1px solid #e07a5f;background:rgba(224,122,95,.1);color:#f0b8a8;border-radius:10px;padding:9px 12px;font-size:13px;margin:0 0 10px;line-height:1.45}
+  .dl-sec{border:1px solid var(--line);border-radius:12px;padding:10px 12px;margin:0 0 10px}
+  .dl-sec>summary{cursor:pointer;font-size:14px;list-style:none}
+  .dl-sec>summary::-webkit-details-marker{display:none}
+  .dl-badge{font-size:12px;color:var(--muted);margin-left:6px}
+  .dl-badge.bad{color:#e07a5f}
+  .dl-badge.ok{color:#8bc48a}
+  .dl-sec textarea{width:100%;min-height:64px;margin:10px 0 8px;background:var(--bg);border:1px solid var(--line);color:var(--text);border-radius:9px;padding:9px 11px;font-size:13px;font-family:inherit;outline:none;resize:vertical}
+  .dl-sec p,.dl-note{color:var(--muted);font-size:12.5px;line-height:1.5;margin:8px 0}
+  .dl-row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:0 0 10px}
+  .dl-row select{flex:1;min-width:140px}
+  .dl-row input[type=text],.dl-row input[type=search]{flex:1;min-width:120px}
+  .dl-row input.num{flex:none;width:72px}
+  .dl-row .btn{padding:8px 12px;font-size:13px}
+  .dl-row .btn.accent,.dl-bar .btn.accent{background:var(--accent);color:var(--bg);border-color:var(--accent);font-weight:600}
+  .dl-row .btn:disabled,.dl-bar .btn:disabled{opacity:.45;cursor:default}
+  .dl-chips{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 8px}
+  .dl-chips button{padding:5px 11px;border-radius:999px;border:1px solid var(--line);background:var(--bg2);color:var(--muted);font-size:12.5px}
+  .dl-chips button.on{background:var(--accent);color:var(--bg);border-color:var(--accent);font-weight:600}
+  .dl-list{margin:0 -4px}
+  .dl-item{display:flex;align-items:center;gap:10px;padding:7px 4px;border-top:1px solid var(--line);cursor:pointer;content-visibility:auto;contain-intrinsic-size:auto 46px}
+  .dl-item:hover{background:var(--bg3)}
+  .dl-item.off{opacity:.45;cursor:default}
+  .dl-item input{width:18px;height:18px;flex:none;accent-color:var(--accent);padding:0}
+  .dl-item .n{color:var(--muted2);font-size:11.5px;min-width:30px;text-align:right;flex:none}
+  .dl-item .tt{flex:1;min-width:0}
+  .dl-item .tt b{display:block;font-weight:500;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .dl-item .tt small{display:block;color:var(--muted);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .dl-st{flex:none;font-size:10.5px;letter-spacing:.4px;text-transform:uppercase;padding:2px 7px;border-radius:5px;border:1px solid var(--line);color:var(--muted)}
+  .dl-st.new{color:var(--accent);border-color:var(--accent-dim)}
+  .dl-st.skipped{color:var(--muted2)}
+  .dl-st.unavailable{color:#e07a5f;border-color:#6b3a30}
+  .dl-bar{position:sticky;bottom:0;margin:10px -20px 0;padding:11px 20px;background:var(--bg2);border-top:1px solid var(--line);display:flex;gap:8px;flex-wrap:wrap;align-items:center;z-index:2}
+  .dl-bar .info{flex:1 1 100%;font-size:13px;color:var(--muted)}
+  .dl-bar .info.bad{color:#e07a5f}
+  .dl-bar .btn{padding:8px 13px;font-size:13px}
+  .dl-job{border:1px solid var(--line);border-radius:12px;padding:10px 12px;margin:0 0 10px}
+  .dl-prog{height:6px;border-radius:3px;background:var(--bg);margin:8px 0;overflow:hidden}
+  .dl-prog i{display:block;height:100%;width:0;background:var(--accent);transition:width .4s}
+  .dl-job pre{max-height:140px;overflow:auto;font-size:11.5px;color:var(--muted);white-space:pre-wrap;word-break:break-all;margin:8px 0 0}
+  .dl-err{color:#e07a5f}
+
   /* ---- mini-bar extras ---- */
   #barLike{font-size:16px;color:var(--muted2);width:32px;height:40px;display:grid;place-items:center;border-radius:8px;flex:none}
   #barLike:hover{color:var(--text);background:var(--bg3)}
@@ -1704,6 +1750,12 @@ function backupsModal(){
     };
     ain.addEventListener("keydown",e=>{ if(e.key==="Enter") asave.click(); });
     arow.append(ain,asave); card.append(ainfo,arow);
+    card.insertAdjacentHTML("beforeend",'<h3 class="sec">Download music</h3>');
+    const dli=el("div","bk-info");
+    dli.textContent="Pick songs from a saved YouTube playlist and save them as m4a (with cover, artist and album) into the download folder - not into the music library.";
+    const dlrow=el("div","bk-acts"), dlb=el("button","btn"); dlb.textContent="⬇ Download from YouTube…";
+    dlb.onclick=()=>{ m.remove(); downloadModal(); };
+    dlrow.appendChild(dlb); card.append(dli,dlrow);
     card.insertAdjacentHTML("beforeend",'<h3 class="sec">Backups</h3>');
     const info=el("div","bk-info");
     info.textContent=!d.enabled?"Backups are disabled (BACKUP_DIR is empty).":
@@ -1732,6 +1784,252 @@ function backupsModal(){
     foot.append(close,up,now,file); card.appendChild(foot);
   }
   paint();
+}
+// ---- download music from YouTube (owner only; the server does the work, see /api/dl/*) ----
+function downloadModal(){
+  const esc=v=>String(v==null?"":v).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+  const card=el("div","card dl"), m=modal(card);
+  const D={tools:null, sid:null, st:null, sel:new Set(), filter:"new", q:"", last:null, shown:[], job:null, timer:null, busy:false};
+  const STL={new:"new",downloaded:"in folder",library:"in library",archived:"downloaded",skipped:"skipped",unavailable:"unavailable"};
+  const DONE=new Set(["downloaded","library","archived"]);
+  const bytes=b=>b>=1073741824?(b/1073741824).toFixed(1)+" GB":b>=1048576?Math.round(b/1048576)+" MB":Math.max(1,Math.round(b/1024))+" KB";
+  const dur=sec=>sec==null?"":fmt(sec);
+  async function api(method,url,body){
+    const r=await fetch(url,{method,headers:body?{"Content-Type":"application/json"}:undefined,body:body?JSON.stringify(body):undefined});
+    let j={}; try{ j=await r.json(); }catch(e){}
+    if(!r.ok) throw new Error(j.detail||("Request failed ("+r.status+")"));
+    return j;
+  }
+  const say=(node,t,bad)=>{ node.textContent=t||""; node.classList.toggle("dl-err",!!bad); };
+  const stop=()=>{ clearTimeout(D.timer); D.timer=null; };
+  const closeAll=()=>{ stop(); m.remove(); };
+  const origRemove=m.remove.bind(m);
+  m.remove=()=>{ stop(); origRemove(); };            // backdrop click also stops polling
+
+  card.innerHTML='<div class="dl-head"><h3>Download music</h3></div><div id="dlWarn"></div>'+
+    '<div class="dl-note" id="dlWhere"></div>'+
+    '<details class="dl-sec" id="dlCk"><summary>YouTube cookies <span class="dl-badge" id="dlCkBadge"></span></summary>'+
+      '<p><b>Needed for downloads.</b> Without them YouTube often answers “Sign in to confirm you’re not a bot”. Paste them once - they stay on the server and are never shown again.</p>'+
+      '<textarea id="dlCkText" spellcheck="false" autocomplete="off" autocapitalize="off" placeholder="Paste the cookies.txt contents, or the Cookie: header value"></textarea>'+
+      '<div class="dl-row"><button class="btn accent" id="dlCkSave">Save cookies</button><button class="btn" id="dlCkTest" hidden>Test cookies</button>'+
+        '<button class="btn" id="dlCkClear" hidden>Remove</button><span class="dl-note" id="dlCkMsg"></span></div>'+
+      '<p><b>How to get them:</b> open a <b>private window</b>, log in to youtube.com, then either use a cookies.txt extension (“Get cookies.txt LOCALLY”) and copy the youtube.com cookies, or press F12 → Network → click any request to youtube.com → Request Headers → copy the whole value after <code>cookie:</code>. Close the private window afterwards (a normal session keeps rotating the cookies, which breaks the saved copy). You can do this on a PC and paste here from your phone.</p></details>'+
+    '<div class="dl-row"><select id="dlSrc"></select><button class="btn accent" id="dlFetch">Fetch list</button><button class="btn" id="dlDel" hidden>Remove</button></div>'+
+    '<div class="dl-row"><input type="text" id="dlUrl" placeholder="Add a playlist link (https://youtube.com/playlist?list=…)" autocomplete="off" autocapitalize="off"><button class="btn" id="dlAdd">Add</button></div>'+
+    '<div class="dl-note" id="dlMsg"></div>'+
+    '<div class="dl-job" id="dlJob" hidden></div>'+
+    '<div id="dlBody"></div>'+
+    '<div class="dl-bar" id="dlBar"><div class="info" id="dlInfo"></div>'+
+      '<button class="btn" id="dlSkip">Skip selected</button><button class="btn" id="dlUnskip">Un-skip selected</button>'+
+      '<span style="flex:1"></span><button class="btn" id="dlClose">Close</button><button class="btn accent" id="dlGo">Download</button></div>';
+  const q=s=>card.querySelector(s);
+  q("#dlClose").onclick=closeAll;
+
+  // --- warnings / cookies / folder ---
+  const cookiesBad=()=>{ const c=(D.tools&&D.tools.cookies)||{}; return !!(c.set&&(c.expired||(c.check&&c.check.ok===false))); };
+  const ago=t=>{ const mn=Math.round((Date.now()/1000-t)/60); return mn<1?"just now":mn<60?mn+" min ago":mn<1440?Math.round(mn/60)+" h ago":Math.round(mn/1440)+" d ago"; };
+  function renderTools(){
+    const t=D.tools; if(!t) return;
+    const w=[];
+    if(!t.installed) w.push("yt-dlp isn’t installed on the server. Run <code>./install.sh</code> (or <code>venv/bin/pip install -r requirements.txt</code>) and restart mus.");
+    else if(t.runtime_problem) w.push(esc(t.runtime_problem));
+    if(cookiesBad()) w.push("⚠ <b>Your YouTube cookies have expired or stopped working.</b> Downloading is switched off until you paste fresh ones.");
+    q("#dlWarn").innerHTML=w.map(x=>'<div class="dl-warn">'+x+'</div>').join("");
+    const d=t.disk||{};
+    q("#dlWhere").innerHTML="Saved as m4a into <b>"+esc(d.dir||"")+"</b>"+(d.free!=null?" · "+bytes(d.free)+" free"+(d.total?" of "+bytes(d.total):""):"")+" · yt-dlp "+esc(t.version||"?");
+    const c=t.cookies||{}, b=q("#dlCkBadge");
+    let txt, cls="dl-badge";
+    if(!c.set){ txt="not set - required"; cls+=" bad"; q("#dlCk").open=true; }
+    else if(cookiesBad()){ txt=c.expired?"⚠ expired - paste fresh ones":"⚠ not working - paste fresh ones"; cls+=" bad"; q("#dlCk").open=true; }
+    else if(c.has_login===false){ txt="saved ("+c.count+") - but no login cookie found"; cls+=" bad"; }
+    else{
+      txt=c.check&&c.check.ok===true?"✓ working (checked "+ago(c.check.checked)+")":"✓ set · "+c.count+" cookies";
+      if(c.check&&c.check.ok===true) cls+=" ok";
+      if(c.login_expires){ const days=Math.round((c.login_expires-Date.now()/1000)/86400); if(days<=7) txt+=" · login expires in "+Math.max(days,0)+" d"; }
+    }
+    b.textContent=txt; b.className=cls;
+    q("#dlCkClear").hidden=!c.set; q("#dlCkTest").hidden=!c.set;
+    const sel=q("#dlSrc"), keep=D.sid;
+    sel.innerHTML=(t.sources||[]).length?(t.sources.map(s=>'<option value="'+s.id+'">'+esc(s.name||s.url)+" ("+s.count+")</option>").join("")):'<option value="">No playlists saved yet</option>';
+    if(keep!=null) sel.value=String(keep);
+    q("#dlDel").hidden=!(t.sources||[]).length; q("#dlFetch").disabled=!(t.sources||[]).length;
+    updateBar();
+  }
+  async function loadTools(){ try{ D.tools=await api("GET","api/dl/tools"); }catch(e){ say(q("#dlMsg"),e.message,true); return; }
+    if(D.sid==null&&(D.tools.sources||[]).length) D.sid=D.tools.sources[0].id;
+    if(D.sid!=null&&!(D.tools.sources||[]).some(s=>s.id===D.sid)) D.sid=(D.tools.sources[0]||{}).id??null;
+    renderTools(); }
+  let ckT=null;
+  function watchCheck(since,node,n=0){
+    clearTimeout(ckT);
+    ckT=setTimeout(async()=>{
+      await loadTools();
+      const c=(D.tools&&D.tools.cookies||{}).check;
+      if(c&&c.checked*1000>=since-2000) say(node,c.ok===true?"Cookies work ✓":c.ok===false?"These cookies don’t work - they look expired or signed out":"Couldn’t test them right now",c.ok===false);
+      else if(n<14&&m.isConnected) watchCheck(since,node,n+1); else say(node,"");
+    },n?2500:1500);
+  }
+  q("#dlCkSave").onclick=async()=>{
+    const node=q("#dlCkMsg"), text=q("#dlCkText").value.trim();
+    if(!text) return say(node,"Paste the cookies first",true);
+    say(node,"Saving…");
+    try{ await api("POST","api/dl/cookies",{text}); q("#dlCkText").value=""; say(node,"Saved ✓ - testing them…"); await loadTools(); watchCheck(Date.now(),node); }
+    catch(e){ say(node,e.message,true); }
+  };
+  q("#dlCkTest").onclick=async()=>{ const node=q("#dlCkMsg"); say(node,"Testing…");
+    try{ await api("POST","api/dl/cookies/check"); watchCheck(Date.now(),node); }catch(e){ say(node,e.message,true); } };
+  q("#dlCkClear").onclick=async()=>{ if(!confirm("Remove the saved YouTube cookies from the server?")) return;
+    try{ await api("POST","api/dl/cookies",{action:"clear"}); await loadTools(); say(q("#dlCkMsg"),"Removed"); }catch(e){ say(q("#dlCkMsg"),e.message,true); } };
+
+  // --- playlists ---
+  q("#dlSrc").onchange=()=>{ D.sid=q("#dlSrc").value?+q("#dlSrc").value:null; D.sel.clear(); D.last=null; loadSource(); };
+  q("#dlAdd").onclick=async()=>{
+    const node=q("#dlMsg"), url=q("#dlUrl").value.trim(); if(!url) return say(node,"Paste a playlist link first",true);
+    say(node,"Saving…");
+    try{ const j=await api("POST","api/dl/sources",{url}); q("#dlUrl").value=""; D.sid=j.id; D.sel.clear(); await loadTools(); say(node,"Saved - fetching the list…"); await fetchList(); }
+    catch(e){ say(node,e.message,true); }
+  };
+  q("#dlUrl").addEventListener("keydown",e=>{ if(e.key==="Enter") q("#dlAdd").click(); });
+  q("#dlDel").onclick=async()=>{ if(D.sid==null||!confirm("Remove this saved playlist? (Downloaded files are not touched.)")) return;
+    try{ await api("DELETE","api/dl/sources/"+D.sid); D.sid=null; D.st=null; D.sel.clear(); await loadTools(); renderList(); }catch(e){ say(q("#dlMsg"),e.message,true); } };
+  async function loadSource(){
+    if(D.sid==null){ D.st=null; renderList(); return; }
+    try{ D.st=await api("GET","api/dl/sources/"+D.sid); }catch(e){ say(q("#dlMsg"),e.message,true); D.st=null; }
+    renderList();
+  }
+  async function fetchList(){
+    if(D.sid==null) return; const node=q("#dlMsg"), btn=q("#dlFetch");
+    btn.disabled=true; say(node,"Reading the playlist from YouTube… (can take up to a minute)");
+    try{ D.st=await api("POST","api/dl/sources/"+D.sid+"/fetch"); D.sel.clear(); D.last=null; say(node,"Found "+D.st.entries.length+" songs"); await loadTools(); }
+    catch(e){ say(node,e.message,true); }
+    btn.disabled=false; renderList();
+  }
+  q("#dlFetch").onclick=fetchList;
+
+  // --- list ---
+  const FILTERS=[["new","New"],["skipped","Skipped"],["done","Already have"],["all","All"]];
+  const matchF=e=>D.filter==="all"||(D.filter==="done"?DONE.has(e.status):D.filter==="new"?e.status==="new":e.status===D.filter);
+  function renderList(){
+    const body=q("#dlBody"); body.innerHTML="";
+    if(!D.st){ body.innerHTML='<div class="bk-empty">'+(D.tools&&(D.tools.sources||[]).length?"Press “Fetch list” to read the playlist.":"Add a YouTube playlist link above to begin.")+"</div>"; updateBar(); return; }
+    const cn=D.st.counts||{}, doneN=(cn.downloaded||0)+(cn.library||0)+(cn.archived||0);
+    const chips=el("div","dl-chips");
+    FILTERS.forEach(([k,l])=>{ const n=k==="new"?cn.new||0:k==="skipped"?cn.skipped||0:k==="done"?doneN:D.st.entries.length;
+      const b=el("button",D.filter===k?"on":""); b.textContent=l+" "+n; b.onclick=()=>{ D.filter=k; renderList(); }; chips.appendChild(b); });
+    body.appendChild(chips);
+    const tools=el("div","dl-row");
+    const search=el("input"); search.type="search"; search.placeholder="Search in this list…"; search.value=D.q;
+    search.oninput=()=>{ D.q=search.value; paintRows(); };
+    const bAll=el("button","btn"); bAll.textContent="Select all shown"; bAll.onclick=()=>{ D.shown.forEach(e=>{ if(e.status!=="unavailable") D.sel.add(e.id); }); syncRows(); };
+    const bNew=el("button","btn"); bNew.textContent="Select all new"; bNew.onclick=()=>{ D.st.entries.forEach(e=>{ if(e.status==="new") D.sel.add(e.id); }); syncRows(); };
+    const bNone=el("button","btn"); bNone.textContent="Select none"; bNone.onclick=()=>{ D.sel.clear(); D.last=null; syncRows(); };
+    tools.append(search,bAll,bNew,bNone); body.appendChild(tools);
+    const rng=el("div","dl-row"); rng.innerHTML='<span class="dl-note" style="margin:0">Select range by position:</span>'+
+      '<input class="num" type="number" min="1" id="dlFrom" placeholder="from"><input class="num" type="number" min="1" id="dlTo" placeholder="to"><button class="btn" id="dlRng">Select</button>'+
+      '<span class="dl-note" style="margin:0">or click one song, then shift-click another</span>';
+    body.appendChild(rng);
+    rng.querySelector("#dlRng").onclick=()=>{ const a=+rng.querySelector("#dlFrom").value, b=+rng.querySelector("#dlTo").value||a;
+      if(!a) return; const lo=Math.min(a,b), hi=Math.max(a,b);
+      D.shown.forEach(e=>{ if(e.index>=lo&&e.index<=hi&&e.status!=="unavailable") D.sel.add(e.id); }); syncRows(); };
+    const list=el("div","dl-list"); list.id="dlList"; body.appendChild(list);
+    paintRows();
+  }
+  function paintRows(){
+    const list=q("#dlList"); if(!list||!D.st) return;
+    const needle=D.q.trim().toLowerCase();
+    D.shown=D.st.entries.filter(e=>matchF(e)&&(!needle||(e.title+" "+(e.channel||"")).toLowerCase().includes(needle)));
+    list.innerHTML="";
+    if(!D.shown.length){ list.innerHTML='<div class="bk-empty">Nothing here.</div>'; updateBar(); return; }
+    const frag=document.createDocumentFragment();
+    D.shown.forEach((e,i)=>{
+      const row=el("div","dl-item"+(e.status==="unavailable"?" off":"")); row.dataset.id=e.id;
+      const cb=el("input"); cb.type="checkbox"; cb.checked=D.sel.has(e.id); cb.disabled=e.status==="unavailable"; cb.tabIndex=-1;
+      const n=el("span","n"); n.textContent=e.index;
+      const tt=el("div","tt"); const b=el("b"); b.textContent=e.title; b.title=e.title;
+      const sm=el("small"); sm.textContent=[e.channel,dur(e.duration)].filter(Boolean).join(" · "); tt.append(b,sm);
+      const st=el("span","dl-st "+e.status); st.textContent=STL[e.status]||e.status;
+      row.append(cb,n,tt,st);
+      row.onclick=ev=>{
+        if(e.status==="unavailable") return;
+        if(ev.shiftKey&&D.last!=null){
+          const a=D.shown.findIndex(x=>x.id===D.last), z=i, on=!D.sel.has(e.id);
+          for(let k=Math.min(a,z);k<=Math.max(a,z);k++){ const x=D.shown[k]; if(x.status==="unavailable") continue; on?D.sel.add(x.id):D.sel.delete(x.id); }
+          window.getSelection&&window.getSelection().removeAllRanges();
+        } else if(D.sel.has(e.id)) D.sel.delete(e.id); else D.sel.add(e.id);
+        D.last=e.id; syncRows();
+      };
+      frag.appendChild(row);
+    });
+    list.appendChild(frag); updateBar();
+  }
+  function syncRows(){ card.querySelectorAll(".dl-item").forEach(r=>{ const cb=r.querySelector("input"); if(cb) cb.checked=D.sel.has(r.dataset.id); }); updateBar(); }
+
+  // --- bottom bar ---
+  function estimate(){ let secs=0, unk=0; (D.st?D.st.entries:[]).forEach(e=>{ if(!D.sel.has(e.id)) return; if(e.duration==null) unk++; else secs+=e.duration; });
+    return {bytes:secs*((D.st&&D.st.disk&&D.st.disk.rate)||20000), unk}; }
+  const running=()=>!!(D.job&&(D.job.status==="running"||D.job.status==="starting"));
+  function updateBar(){
+    const t=D.tools||{}, c=t.cookies||{}, n=D.sel.size, info=q("#dlInfo"); let bad=false, txt="";
+    const ready=t.installed&&!t.runtime_problem&&c.set&&!cookiesBad();
+    if(!t.installed) { txt="yt-dlp isn’t installed"; bad=true; }
+    else if(t.runtime_problem){ txt="No usable JavaScript runtime (see the warning above)"; bad=true; }
+    else if(!c.set){ txt="Paste your YouTube cookies above to enable downloading"; bad=true; }
+    else if(cookiesBad()){ txt="⚠ Cookies expired / not working - paste fresh ones above"; bad=true; }
+    else{ const est=estimate(), d=(D.st&&D.st.disk)||t.disk||{}, parts=[n+" selected"];
+      if(n){ parts.push("≈ "+bytes(est.bytes)+(est.unk?" + "+est.unk+" of unknown length":"")); if(d.free!=null&&est.bytes>d.free*0.95){ bad=true; parts.push("may not fit"); } }
+      if(d.free!=null) parts.push(bytes(d.free)+" free"); txt=parts.join(" · "); }
+    info.textContent=txt; info.classList.toggle("bad",bad);
+    const sk=[...D.sel].filter(id=>{ const e=D.st&&D.st.entries.find(x=>x.id===id); return e&&e.status==="skipped"; }).length;
+    q("#dlGo").disabled=!n||!ready||running()||D.busy; q("#dlSkip").disabled=!n||D.busy; q("#dlUnskip").disabled=!sk||D.busy;
+    q("#dlGo").textContent=n?"Download "+n:"Download";
+  }
+  async function mark(kind){
+    if(!D.sel.size||D.sid==null) return; D.busy=true; updateBar();
+    try{ D.st=await api("POST","api/dl/sources/"+D.sid+"/"+kind,{ids:[...D.sel]}); toast(kind==="skip"?"Skipped "+D.sel.size:"Un-skipped"); D.sel.clear(); D.last=null; }
+    catch(e){ say(q("#dlMsg"),e.message,true); }
+    D.busy=false; renderList(); loadTools();
+  }
+  q("#dlSkip").onclick=()=>mark("skip"); q("#dlUnskip").onclick=()=>mark("unskip");
+  q("#dlGo").onclick=async()=>{
+    if(!D.sel.size||D.sid==null) return; D.busy=true; updateBar();
+    try{ const j=await api("POST","api/dl/sources/"+D.sid+"/start",{ids:[...D.sel]}); D.job=j.job; D.sel.clear(); renderJob(); poll(); say(q("#dlMsg"),""); }
+    catch(e){ say(q("#dlMsg"),e.message,true); }
+    D.busy=false; syncRows();
+  };
+
+  // --- job ---
+  function renderJob(){
+    const box=q("#dlJob"), j=D.job;
+    if(!j||j.status==="idle"){ box.hidden=true; return; }
+    box.hidden=false;
+    const run=j.status==="running"||j.status==="starting";
+    const head=run?"Downloading "+Math.min((j.done||0)+1,j.total)+" of "+j.total+(j.title?" - "+esc(j.title):" - starting…")
+      :j.status==="done"?"✓ Finished":j.status==="cancelled"?"Cancelled":"✗ Failed";
+    box.innerHTML="<div>"+head+'</div><div class="dl-prog"><i style="width:'+(run?(j.pct||0):j.status==="done"?100:0)+'%"></i></div>'+
+      (run?"":'<div class="dl-note'+(j.status==="failed"?" dl-err":"")+'">'+esc(j.summary||"")+"</div>")+
+      '<div class="dl-row" style="margin:0">'+(run?'<button class="btn" id="dlCancel">Cancel</button>':'<button class="btn" id="dlHide">Dismiss</button>')+"</div>"+
+      (j.log?'<details><summary class="dl-note">Log</summary><pre>'+esc(j.log)+"</pre></details>":"");
+    const c=box.querySelector("#dlCancel"), h=box.querySelector("#dlHide");
+    if(c) c.onclick=async()=>{ try{ const r=await api("POST","api/dl/job/cancel"); D.job=r.job; renderJob(); }catch(e){ say(q("#dlMsg"),e.message,true); } };
+    if(h) h.onclick=()=>{ box.hidden=true; };
+  }
+  function poll(){
+    stop();
+    D.timer=setTimeout(async()=>{
+      if(!m.isConnected) return;
+      let was=running();
+      try{ const r=await api("GET","api/dl/job"); D.job=r.job; }catch(e){}
+      renderJob(); updateBar();
+      if(running()) poll();
+      else if(was){ await loadSource(); await loadTools(); }
+    },2000);
+  }
+
+  // --- open ---
+  (async()=>{
+    await loadTools(); await loadSource();
+    try{ const r=await api("GET","api/dl/job"); D.job=r.job; renderJob(); if(running()) poll(); }catch(e){}
+  })();
 }
 // phone only: Scan and Log in/out moved out of the dock into this modal
 const phoneUI=()=>matchMedia("(max-width:640px)").matches;
