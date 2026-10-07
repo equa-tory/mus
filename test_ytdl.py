@@ -56,7 +56,8 @@ class Scratch(unittest.TestCase):
             return c
 
         c = db()
-        c.executescript("CREATE TABLE tracks (id INTEGER PRIMARY KEY, path TEXT, title TEXT, artist TEXT);")
+        c.executescript("CREATE TABLE tracks (id INTEGER PRIMARY KEY, path TEXT, title TEXT, artist TEXT, mtime REAL);"
+                        "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);")
         c.commit()
         c.close()
         ytdl.init(self.data, self.dl, db)
@@ -237,17 +238,51 @@ class SourceTests(Scratch):
         self.assertEqual(st["counts"]["new"], 1)
         self.assertEqual(st["disk"]["dir"], str(self.dl))
 
-    def test_library_matches_artist_and_title(self):
-        sid = self.source("Mitski - Your Best American Girl (Official Audio)")
+    def lib(self, *rows):
         with self.db() as c:
-            c.execute("INSERT INTO tracks(path,title,artist) VALUES(?,?,?)",
-                      ("/m/y.m4a", "Your Best American Girl", "Mitski"))
-        # video's channel is "Chan" so the split is unconfirmed -> no false match on the bare title
-        self.assertEqual(ytdl.source_state(sid)["entries"][0]["status"], "new")
+            for artist, title in rows:
+                c.execute("INSERT INTO tracks(path,title,artist,mtime) VALUES(?,?,?,1)",
+                          (f"/m/{title}.m4a", title, artist))
+
+    def one(self, title, channel="Chan"):
+        sources = ytdl.list_sources()
+        sid = sources[0]["id"] if sources else self.source("x")
         with self.db() as c:
-            c.execute("UPDATE dl_sources SET entries_json=?", (json.dumps(
-                [{"id": "vid00000000", "title": "Mitski - Your Best American Girl", "channel": "Mitski"}]),))
-        self.assertEqual(ytdl.source_state(sid)["entries"][0]["status"], "library")
+            c.execute("UPDATE dl_sources SET entries_json=?",
+                      (json.dumps([{"id": "vid00000000", "title": title, "channel": channel, "index": 1}]),))
+        return ytdl.source_state(sid)["entries"][0]
+
+    def test_library_matches_when_the_artist_is_in_the_youtube_title_or_channel(self):
+        self.lib(("Mitski", "Your Best American Girl"), ("Nanu Riso / 初音ミク", "葦ですか。"),
+                 ("tommy. / GUMI", "mechanical corpse"))
+        for title, chan in (("Mitski - Your Best American Girl (Official Audio)", "Chan"),   # artist in the title
+                            ("葦ですか。／初音ミク", "Nanu Riso"),                              # artist = channel
+                            ("tommy. - mechanical corpse (ft. GUMI)", "tommy.")):
+            e = self.one(title, chan)
+            self.assertEqual(e["status"], "library", title)
+            self.assertTrue(e["match"])
+
+    def test_title_only_match_is_flagged_not_trusted(self):
+        self.lib(("ATLUS", "Your Affection"))
+        e = self.one("Persona 4 Revival - Your Affection (full length edit)", "billium")
+        self.assertEqual((e["status"], e["match"]), ("similar", "ATLUS - Your Affection"))
+        self.assertEqual(self.one("Something else entirely", "billium")["status"], "new")
+
+    def test_short_or_unrelated_titles_do_not_match(self):
+        self.lib(("Moe Shop", "Say"), ("X", "uni"))                     # 3 characters: far too generic
+        self.assertEqual(self.one("Say hello to my little friend", "Moe Shop")["status"], "library")  # artist confirms
+        self.assertEqual(self.one("Some universe song", "Other")["status"], "new")   # 'uni' inside a word, no artist
+
+    def test_your_own_skip_beats_a_weak_guess_but_not_a_confident_match(self):
+        self.lib(("ATLUS", "Your Affection"), ("Mitski", "Townie"))
+        sid = self.source("x")
+        entries = [{"id": "vid00000000", "title": "Persona 4 Revival - Your Affection", "channel": "billium", "index": 1},
+                   {"id": "vid00000001", "title": "Mitski - Townie", "channel": "Mitski", "index": 2}]
+        with self.db() as c:
+            c.execute("UPDATE dl_sources SET entries_json=?", (json.dumps(entries),))
+        ytdl.mark(sid, ["vid00000000", "vid00000001"])
+        got = {e["id"]: e["status"] for e in ytdl.source_state(sid)["entries"]}
+        self.assertEqual(got, {"vid00000000": "skipped", "vid00000001": "library"})
 
     def test_bulk_skip_unskip_accepts_only_known_ids(self):
         sid = self.source("A", "B", "C", "D")
@@ -275,6 +310,37 @@ class SourceTests(Scratch):
         with self.db() as c:
             c.executescript("DROP TABLE dl_skipped; DROP TABLE dl_sources;")
         self.assertEqual(ytdl.list_sources(), [])               # no crash: tables re-created on demand
+
+
+class DownloadDirTests(Scratch):
+    def test_default_then_custom_then_reset(self):
+        self.assertEqual(ytdl.download_dir(), self.dl)
+        new = self.root / "Elsewhere" / "Songs"
+        info = ytdl.set_download_dir(str(new))
+        self.assertEqual((info["dir"], info["custom"], info["default"]), (str(new), True, str(self.dl)))
+        self.assertTrue(new.is_dir())                                   # created
+        self.assertEqual(ytdl.download_dir(), new)
+        self.assertEqual(ytdl.archive_path("https://www.youtube.com/playlist?list=PL1").parent, new)
+        self.assertEqual(ytdl.disk_info()["dir"], str(new))
+        self.assertEqual(ytdl.set_download_dir("")["dir"], str(self.dl))   # back to the default
+        self.assertFalse(ytdl.dir_info()["custom"])
+
+    def test_rejects_bad_paths_and_keeps_the_old_one(self):
+        for bad in ("relative/dir", "/", "x\ny"):
+            with self.assertRaises(ValueError, msg=bad):
+                ytdl.set_download_dir(bad)
+        with self.assertRaises(ValueError):                              # can't create under a file
+            f = self.root / "afile"
+            f.write_text("x")
+            ytdl.set_download_dir(str(f / "sub"))
+        self.assertEqual(ytdl.download_dir(), self.dl)
+
+    def test_files_in_the_new_folder_are_recognised(self):
+        new = self.root / "Songs"
+        ytdl.set_download_dir(str(new))
+        sid = self.source("Alpha")
+        (new / "Alpha.m4a").write_bytes(b"x")
+        self.assertEqual(ytdl.source_state(sid)["entries"][0]["status"], "downloaded")
 
 
 class BuildCmdTests(Scratch):
@@ -495,6 +561,15 @@ class RouteTests(unittest.TestCase):
         self.assertEqual(self.app.dl_tools()["sources"][0]["name"], "N")
         self.assertEqual(self.app.dl_tools()["disk"]["dir"], self.root + "/Loop")
         self.assertEqual(self.app.dl_delete_source(r["id"])["sources"], [])
+        new = self.root + "/Other"
+        self.assertEqual(self.app.dl_set_dir({"path": new})["dir"], new)
+        self.assertEqual(self.app.dl_dir()["dir"], new)
+        with self.assertRaises(HTTPException) as cm:
+            self.app.dl_set_dir({"path": "not/absolute"})
+        self.assertEqual(cm.exception.status_code, 400)
+        with self.assertRaises(HTTPException):
+            self.app.dl_set_dir({"path": 5})
+        self.assertEqual(self.app.dl_set_dir({"path": ""})["dir"], self.root + "/Loop")
 
 
 if __name__ == "__main__":

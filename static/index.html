@@ -1752,10 +1752,27 @@ function backupsModal(){
     arow.append(ain,asave); card.append(ainfo,arow);
     card.insertAdjacentHTML("beforeend",'<h3 class="sec">Download music</h3>');
     const dli=el("div","bk-info");
-    dli.textContent="Pick songs from a saved YouTube playlist and save them as m4a (with cover, artist and album) into the download folder - not into the music library.";
+    dli.textContent="Pick songs from a saved YouTube playlist and save them as m4a (with cover, artist and album) into this folder - not into the music library:";
+    const drow=el("div","bk-acts"), din=el("input"), dsave=el("button","btn"), dreset=el("button","btn");
+    din.placeholder="/mnt/videos/Loop"; din.style.flex="1"; din.maxLength=500; din.autocapitalize="off"; din.spellcheck=false;
+    dsave.textContent="Save"; dreset.textContent="Default"; dreset.hidden=true;
+    const dnote=el("div","bk-info"); dnote.style.margin="0 0 12px";
+    const showDir=d=>{ din.value=d.dir; dreset.hidden=!d.custom;
+      dnote.textContent=(d.free!=null?bytes0(d.free)+" free"+(d.total?" of "+bytes0(d.total):"")+" · ":"")+
+        "Files already saved in a previous folder are no longer recognised as downloaded."; };
+    const bytes0=b=>b>=1073741824?(b/1073741824).toFixed(1)+" GB":Math.round(b/1048576)+" MB";
+    fetch("api/dl/dir").then(r=>r.ok?r.json():null).then(d=>{ if(d) showDir(d); }).catch(()=>{});
+    const saveDir=async v=>{
+      const r=await fetch("api/dl/dir",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({path:v})});
+      if(!r.ok) return fail(r);
+      showDir(await r.json()); toast("Download folder saved");
+    };
+    dsave.onclick=()=>saveDir(din.value); dreset.onclick=()=>saveDir("");
+    din.addEventListener("keydown",e=>{ if(e.key==="Enter") dsave.click(); });
+    drow.append(din,dsave,dreset);
     const dlrow=el("div","bk-acts"), dlb=el("button","btn"); dlb.textContent="⬇ Download from YouTube…";
     dlb.onclick=()=>{ m.remove(); downloadModal(); };
-    dlrow.appendChild(dlb); card.append(dli,dlrow);
+    dlrow.appendChild(dlb); card.append(dli,drow,dnote,dlrow);
     card.insertAdjacentHTML("beforeend",'<h3 class="sec">Backups</h3>');
     const info=el("div","bk-info");
     info.textContent=!d.enabled?"Backups are disabled (BACKUP_DIR is empty).":
@@ -1790,7 +1807,7 @@ function downloadModal(){
   const esc=v=>String(v==null?"":v).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
   const card=el("div","card dl"), m=modal(card);
   const D={tools:null, sid:null, st:null, sel:new Set(), filter:"new", q:"", last:null, shown:[], job:null, timer:null, busy:false};
-  const STL={new:"new",downloaded:"in folder",library:"in library",archived:"downloaded",skipped:"skipped",unavailable:"unavailable"};
+  const STL={new:"new",downloaded:"in folder",library:"in library",similar:"maybe in library",archived:"downloaded",skipped:"skipped",unavailable:"unavailable"};
   const DONE=new Set(["downloaded","library","archived"]);
   const bytes=b=>b>=1073741824?(b/1073741824).toFixed(1)+" GB":b>=1048576?Math.round(b/1048576)+" MB":Math.max(1,Math.round(b/1024))+" KB";
   const dur=sec=>sec==null?"":fmt(sec);
@@ -1836,7 +1853,7 @@ function downloadModal(){
     if(cookiesBad()) w.push("⚠ <b>Your YouTube cookies have expired or stopped working.</b> Downloading is switched off until you paste fresh ones.");
     q("#dlWarn").innerHTML=w.map(x=>'<div class="dl-warn">'+x+'</div>').join("");
     const d=t.disk||{};
-    q("#dlWhere").innerHTML="Saved as m4a into <b>"+esc(d.dir||"")+"</b>"+(d.free!=null?" · "+bytes(d.free)+" free"+(d.total?" of "+bytes(d.total):""):"")+" · yt-dlp "+esc(t.version||"?");
+    q("#dlWhere").innerHTML="Saved as m4a into <b>"+esc(d.dir||"")+"</b> <span style='color:var(--muted2)'>(change it in ⚙ Settings)</span>"+(d.free!=null?" · "+bytes(d.free)+" free"+(d.total?" of "+bytes(d.total):""):"")+" · yt-dlp "+esc(t.version||"?");
     const c=t.cookies||{}, b=q("#dlCkBadge");
     let txt, cls="dl-badge";
     if(!c.set){ txt="not set - required"; cls+=" bad"; q("#dlCk").open=true; }
@@ -1907,14 +1924,14 @@ function downloadModal(){
   q("#dlFetch").onclick=fetchList;
 
   // --- list ---
-  const FILTERS=[["new","New"],["skipped","Skipped"],["done","Already have"],["all","All"]];
+  const FILTERS=[["new","New"],["similar","Maybe have"],["skipped","Skipped"],["done","Already have"],["all","All"]];
   const matchF=e=>D.filter==="all"||(D.filter==="done"?DONE.has(e.status):D.filter==="new"?e.status==="new":e.status===D.filter);
   function renderList(){
     const body=q("#dlBody"); body.innerHTML="";
     if(!D.st){ body.innerHTML='<div class="bk-empty">'+(D.tools&&(D.tools.sources||[]).length?"Press “Fetch list” to read the playlist.":"Add a YouTube playlist link above to begin.")+"</div>"; updateBar(); return; }
     const cn=D.st.counts||{}, doneN=(cn.downloaded||0)+(cn.library||0)+(cn.archived||0);
     const chips=el("div","dl-chips");
-    FILTERS.forEach(([k,l])=>{ const n=k==="new"?cn.new||0:k==="skipped"?cn.skipped||0:k==="done"?doneN:D.st.entries.length;
+    FILTERS.forEach(([k,l])=>{ const n=k==="new"?cn.new||0:k==="similar"?cn.similar||0:k==="skipped"?cn.skipped||0:k==="done"?doneN:D.st.entries.length;
       const b=el("button",D.filter===k?"on":""); b.textContent=l+" "+n; b.onclick=()=>{ D.filter=k; renderList(); }; chips.appendChild(b); });
     body.appendChild(chips);
     const tools=el("div","dl-row");
@@ -1946,7 +1963,7 @@ function downloadModal(){
       const cb=el("input"); cb.type="checkbox"; cb.checked=D.sel.has(e.id); cb.disabled=e.status==="unavailable"; cb.tabIndex=-1;
       const n=el("span","n"); n.textContent=e.index;
       const tt=el("div","tt"); const b=el("b"); b.textContent=e.title; b.title=e.title;
-      const sm=el("small"); sm.textContent=[e.channel,dur(e.duration)].filter(Boolean).join(" · "); tt.append(b,sm);
+      const sm=el("small"); sm.textContent=[e.channel,dur(e.duration)].filter(Boolean).join(" · ")+(e.match?"  ≈ "+e.match:""); sm.title=e.match?"Matched with your library: "+e.match:""; tt.append(b,sm);
       const st=el("span","dl-st "+e.status); st.textContent=STL[e.status]||e.status;
       row.append(cb,n,tt,st);
       row.onclick=ev=>{

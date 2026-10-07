@@ -41,8 +41,8 @@ _UNAVAILABLE_TITLES = {"[private video]", "[deleted video]", "[unavailable video
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 _TEXT = {"text": True, "encoding": "utf-8", "errors": "replace"}
 
-NEW, DOWNLOADED, IN_LIBRARY, ARCHIVED, SKIPPED, UNAVAILABLE = (
-    "new", "downloaded", "library", "archived", "skipped", "unavailable")
+NEW, DOWNLOADED, IN_LIBRARY, SIMILAR, ARCHIVED, SKIPPED, UNAVAILABLE = (
+    "new", "downloaded", "library", "similar", "archived", "skipped", "unavailable")
 
 DEFAULT_DIR = "/mnt/videos/Loop"
 MIN_FREE_BYTES = 1024 ** 3          # refuse to start below this
@@ -67,8 +67,59 @@ def ytdl_dir():
     return _CFG["data"] / "ytdl"
 
 
-def download_dir():
+DEFAULT_DIR_KEY = "dl_dir"
+
+
+def default_dir():
+    """The folder from DOWNLOAD_DIR / the built-in default (what 'Reset' goes back to)."""
     return _CFG["dir"]
+
+
+def download_dir():
+    """The folder songs are saved into: the one chosen in Settings (stored in the `meta`
+    table, so it syncs and is backed up) or else the DOWNLOAD_DIR default."""
+    try:
+        with _conn() as c:
+            r = c.execute("SELECT value FROM meta WHERE key=?", (DEFAULT_DIR_KEY,)).fetchone()
+        if r and r["value"].strip():
+            return Path(r["value"])
+    except sqlite3.Error:
+        pass
+    return _CFG["dir"]
+
+
+def set_download_dir(raw):
+    """Validate and store a new download folder ('' = back to the default). It must be an
+    absolute path that exists or can be created, and that we can write to. Returns disk_info()."""
+    raw = (raw or "").strip()
+    if not raw:
+        with _conn() as c:
+            c.execute("DELETE FROM meta WHERE key=?", (DEFAULT_DIR_KEY,))
+        return dir_info()
+    if "\n" in raw or "\0" in raw or len(raw) > 500:
+        raise ValueError("That isn't a valid folder path")
+    p = Path(raw).expanduser()
+    if not p.is_absolute():
+        raise ValueError("Use a full path, like /mnt/videos/Loop")
+    p = Path(os.path.normpath(p))
+    if p == Path(p.anchor):
+        raise ValueError("Pick a folder, not the filesystem root")
+    try:
+        p.mkdir(parents=True, exist_ok=True)
+        fd, probe = tempfile.mkstemp(prefix=".write-test-", dir=p)
+        os.close(fd)
+        os.remove(probe)
+    except OSError as e:
+        raise ValueError(f"Can't write to {p}: {e.strerror or e}")
+    with _conn() as c:
+        c.execute("INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)", (DEFAULT_DIR_KEY, str(p)))
+    return dir_info()
+
+
+def dir_info():
+    d = download_dir()
+    free, total = free_space(d)
+    return {"dir": str(d), "default": str(default_dir()), "custom": d != default_dir(), "free": free, "total": total}
 
 
 def _conn():
@@ -275,8 +326,7 @@ def free_space(path):
 
 
 def disk_info():
-    free, total = free_space(download_dir())
-    return {"dir": str(download_dir()), "free": free, "total": total, "rate": RATE}
+    return {**dir_info(), "rate": RATE}
 
 
 # ---- Cookies ---------------------------------------------------------------
@@ -699,11 +749,15 @@ def mark(sid, ids, skip=True):
     return len(ids)
 
 
-def local_index(url, music_db=None):
+_ARTIST_SPLIT = re.compile(r"\s*(?:/|,|&|;|\bfeat\.?\b|\bft\.?\b|×)\s*", re.I)
+_FUZZY = {"sig": None, "memo": {}}
+
+
+def local_index(url):
     """What we already have: name keys of files in the download folder (recursive), the
-    library's track titles / "artist title" / file names (so a song already in mus isn't
-    offered again), and the ids in Lasso's archive."""
-    names, lib = set(), set()
+    library's tracks (for exact *and* fuzzy matching, so a song already in mus isn't offered
+    again) and the ids in Lasso's archive."""
+    names, lib, tracks = set(), {}, []
     d = download_dir()
     if d.is_dir():
         for dirpath, _dirs, files in os.walk(d):
@@ -713,40 +767,89 @@ def local_index(url, music_db=None):
                     k = name_key(stem)
                     if k:
                         names.add(k)
+    sig = None
     try:
         with _conn() as c:
             for r in c.execute("SELECT title, artist, path FROM tracks"):
-                for k in (name_key(r["title"]), name_key((r["artist"] or "") + (r["title"] or "")),
+                label = " - ".join(x for x in ((r["artist"] or "").strip(), (r["title"] or "").strip()) if x)
+                kt = name_key(r["title"])
+                for k in (kt, name_key((r["artist"] or "") + (r["title"] or "")),
                           name_key(os.path.splitext(os.path.basename(r["path"] or ""))[0])):
                     if k:
-                        lib.add(k)
+                        lib.setdefault(k, label)
+                tracks.append({"kt": kt, "label": label,
+                               "ka": [k for k in (name_key(a) for a in _ARTIST_SPLIT.split(r["artist"] or "")) if len(k) >= 2]})
+            sig = tuple(c.execute("SELECT COUNT(*), COALESCE(MAX(id),0), COALESCE(SUM(mtime),0) FROM tracks").fetchone())
     except sqlite3.Error:
         pass
-    return {"names": names, "library": lib, "archive": read_archive_ids(archive_path(url))}
+    if _FUZZY["sig"] != sig:
+        _FUZZY["sig"], _FUZZY["memo"] = sig, {}
+    return {"names": names, "library": lib, "tracks": tracks, "archive": read_archive_ids(archive_path(url))}
+
+
+def fuzzy_library(key, chan_key, tracks, memo=None):
+    """Looser comparison of one playlist entry with the library, for the many songs whose YouTube
+    title is not the tag title ("【MV】Song / Artist", "Artist - Song (Official Video)").
+    A library title that appears inside the YouTube title (or the reverse) is a match:
+      * (`library`, label) when an artist of that track also shows up in the YouTube title or
+        channel -- confident enough to treat as already owned;
+      * (`similar`, label) when only the title lines up (4+ characters) -- worth a look, so
+        it's flagged but not hidden among the "new" ones.
+    None when nothing is close."""
+    mk = (key, chan_key)
+    if memo is not None and mk in memo:
+        return memo[mk]
+    weak, hit = None, None
+    for L in tracks:
+        lt = L["kt"]
+        if len(lt) < 3:
+            continue
+        if lt in key or (len(key) >= 6 and key in lt):
+            if any(a in key or a in chan_key or (len(chan_key) >= 3 and chan_key in a) for a in L["ka"]):
+                hit = (IN_LIBRARY, L["label"])
+                break
+            if weak is None and len(lt) >= 4 and lt in key:
+                weak = (SIMILAR, L["label"])
+    hit = hit or weak
+    if memo is not None:
+        memo[mk] = hit
+    return hit
 
 
 def classify(entries, index, skipped_ids):
-    """Status for every entry. Precedence: unavailable > downloaded (a file here) > in library
-    (mus already has it) > skipped > archived (only in Lasso's archive) > new."""
+    """Status for every entry (plus `match`: the library track it was matched to, if any).
+    Precedence: unavailable > downloaded (a file in the download folder) > in library (exact or
+    confident fuzzy) > skipped (your own decision beats a weak guess) > similar (title-only
+    guess) > archived (only in Lasso's archive) > new."""
     out = []
     for e in entries:
         vid, title = e["id"], e.get("title") or ""
         key = name_key(title)
         t = derive_tags({"title": title, "channel": e.get("channel")})
         pair = name_key(t["artist"] + t["title"]) if t["artist"] else ""
+        match = None
+        lib_hit = index["library"].get(key) if key else None
+        lib_hit = lib_hit or (index["library"].get(pair) if pair else None)
+        fz = None
         if title.strip().lower() in _UNAVAILABLE_TITLES:
             status = UNAVAILABLE
         elif key and key in index["names"]:
             status = DOWNLOADED
-        elif (key and key in index["library"]) or (pair and pair in index["library"]):
-            status = IN_LIBRARY
-        elif vid in skipped_ids:
-            status = SKIPPED
-        elif vid in index["archive"]:
-            status = ARCHIVED
+        elif lib_hit is not None:
+            status, match = IN_LIBRARY, lib_hit
         else:
-            status = NEW
-        out.append({**e, "status": status})
+            fz = fuzzy_library(key, name_key(e.get("channel") or ""), index.get("tracks") or [], _FUZZY["memo"]) if key else None
+            if fz and fz[0] == IN_LIBRARY:
+                status, match = IN_LIBRARY, fz[1]
+            elif vid in skipped_ids:
+                status = SKIPPED
+            elif fz:
+                status, match = SIMILAR, fz[1]
+            elif vid in index["archive"]:
+                status = ARCHIVED
+            else:
+                status = NEW
+        out.append({**e, "status": status, **({"match": match} if match else {})})
     return out
 
 

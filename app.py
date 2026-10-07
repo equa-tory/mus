@@ -725,6 +725,17 @@ def _ids(body) -> list[str]:
 def dl_tools():
     return ytdl.tools_state()
 
+@app.get("/api/dl/dir", dependencies=OWNER)
+def dl_dir():
+    return ytdl.dir_info()
+
+@app.put("/api/dl/dir", dependencies=OWNER)
+def dl_set_dir(body: dict = Body(...)):
+    path = body.get("path", "")
+    if not isinstance(path, str):
+        raise HTTPException(400, "path must be text")
+    return _dl(ytdl.set_download_dir, path)           # "" = back to the default folder
+
 @app.post("/api/dl/cookies", dependencies=OWNER)
 def dl_cookies(body: dict = Body(...)):
     if body.get("action") == "clear":
