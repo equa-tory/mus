@@ -516,17 +516,22 @@ def logout(response: Response):
     response.delete_cookie(AUTH_COOKIE)
     return {"ok": True}
 
-@app.post("/api/scan", dependencies=OWNER)
-def scan():
+def _start_scan() -> bool:
     with SCAN_LOCK:
         if SCAN["running"]:
-            return JSONResponse({"status": "already running"}, status_code=409)
+            return False
         for k in ("scanned", "total", "added", "updated", "removed"):
             SCAN[k] = 0
         SCAN["error"] = None
         SCAN["finished_at"] = None
         SCAN["running"] = True
     threading.Thread(target=_scan_worker, daemon=True).start()
+    return True
+
+@app.post("/api/scan", dependencies=OWNER)
+def scan():
+    if not _start_scan():
+        return JSONResponse({"status": "already running"}, status_code=409)
     return {"status": "started"}
 
 @app.get("/api/scan/status")
@@ -704,6 +709,40 @@ def follow_author(body: dict = Body(...)):
         nxt = [k for k in cur if k != key] + ([key] if on else [])
         c.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('following',?)", (json.dumps(nxt),))
         return _read_settings(c)
+
+# --- Pull new songs from another machine over ssh (owner only; logic in macpull.py) ---
+import macpull                                # noqa: E402
+macpull.init(DATA_DIR, MUSIC_DIR, db, after=_start_scan)   # new songs landed -> rescan
+
+@app.get("/api/pull", dependencies=OWNER)
+def pull_info():
+    return macpull.source_info()
+
+@app.put("/api/pull/source", dependencies=OWNER)
+def pull_set_source(body: dict = Body(...)):
+    src = body.get("source", "")
+    if not isinstance(src, str):
+        raise HTTPException(400, "source must be text")
+    try:
+        return macpull.set_source(src)                 # "" = back to the default
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+@app.post("/api/pull/start", dependencies=OWNER)
+def pull_start():
+    ok, err = macpull.start()
+    if not ok:
+        raise HTTPException(409 if "already running" in err else 400, err)
+    return {"ok": True, "job": macpull.job_state()}
+
+@app.get("/api/pull/job", dependencies=OWNER)
+def pull_job():
+    return {"job": macpull.job_state()}
+
+@app.post("/api/pull/cancel", dependencies=OWNER)
+def pull_cancel():
+    macpull.cancel()
+    return {"ok": True}
 
 # --- Download music from YouTube (owner only; logic in ytdl.py) ----------------
 def _dl(fn, *a, **kw):

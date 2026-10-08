@@ -34,6 +34,10 @@ haven't logged in get a small corner panel that starts out **listening along** w
 playing (same track, same position, follows pause/skip/seek); **Stop** lets them play their own music
 locally, which is never saved to the server.
 
+## Pull music from another computer
+
+⚙ Settings → **Pull from another computer** copies songs that aren't in the library yet from a folder on another machine (default: the Apple Music folder on the Mac, `equa@192.168.1.73:/Users/equa/Music/Music/Media.localized/Music/`) and rescans. Change the source to any `user@ip:/full/path`. It uses `rsync` over `ssh`, so the server's user needs key-based ssh access to that machine (`ssh-copy-id user@ip`); nothing is ever deleted or overwritten.
+
 ## Backups
 
 The database (library index, likes, playlists, history) is backed up automatically: by default every 48 h into `/mnt/backup/mus`, keeping the newest 1. Override in `.env` (see `.env.example`): `BACKUP_DIR` (empty = off), `BACKUP_EVERY_HOURS` (`0` = manual only), `BACKUP_KEEP`. The ⚙ button in the header lists the backups and lets you download or restore one, restore from an uploaded file, or back up right now. Cover art isn't included — a scan rebuilds it. Make sure the service user can write to the backup folder (`install.sh` creates the default one).

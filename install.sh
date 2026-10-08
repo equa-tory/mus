@@ -63,15 +63,16 @@ need=()
 python3 -c 'import sys; sys.exit(sys.version_info < (3,10))' 2>/dev/null || need+=(python3)
 python3 -c 'import venv, ensurepip' 2>/dev/null || need+=(venv)
 command -v ffmpeg >/dev/null || need+=(ffmpeg)
+command -v rsync >/dev/null && command -v ssh >/dev/null || need+=(rsync-ssh)   # ⚙ Settings → Pull from another computer
 if ((${#need[@]})); then
   say "Missing: ${need[*]}"
   if command -v apt-get >/dev/null; then
     run $SUDO apt-get update -qq
-    run $SUDO apt-get install -y python3 python3-venv python3-pip ffmpeg
+    run $SUDO apt-get install -y python3 python3-venv python3-pip ffmpeg rsync openssh-client
   elif command -v dnf >/dev/null; then
-    run $SUDO dnf install -y python3 python3-pip ffmpeg-free
+    run $SUDO dnf install -y python3 python3-pip ffmpeg-free rsync openssh-clients
   elif command -v pacman >/dev/null; then
-    run $SUDO pacman -S --needed --noconfirm python python-pip ffmpeg
+    run $SUDO pacman -S --needed --noconfirm python python-pip ffmpeg rsync openssh
   else
     die "unsupported package manager — install python3 (>=3.10, with venv) and ffmpeg manually, then re-run"
   fi

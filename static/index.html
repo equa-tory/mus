@@ -1721,6 +1721,58 @@ function renamePlaylist(p){
     body:JSON.stringify({name:inp.value})}); await loadPlaylists(); m.remove(); render(); };
 }
 
+// ---- pull new songs from another machine over ssh (⚙ Settings; /api/pull, logic in macpull.py) ----
+function pullSection(fail){
+  const box=el("div");
+  box.insertAdjacentHTML("beforeend",'<h3 class="sec">Pull from another computer</h3>');
+  const info=el("div","bk-info");
+  info.textContent="Copies songs that aren’t in the library yet over ssh (key login, nothing is overwritten or deleted), then rescans. Source as user@ip:/full/path:";
+  const row=el("div","bk-acts"), inp=el("input"), save=el("button","btn"), reset=el("button","btn");
+  inp.placeholder="user@ip:/full/path"; inp.style.flex="1"; inp.maxLength=500; inp.autocapitalize="off"; inp.spellcheck=false;
+  save.textContent="Save"; reset.textContent="Default"; reset.hidden=true; row.append(inp,save,reset);
+  const go=el("button","btn accent"), stop=el("button","btn"), actions=el("div","bk-acts");
+  go.textContent="⇩ Pull new songs"; stop.textContent="Cancel"; stop.hidden=true; actions.append(go,stop);
+  const note=el("div","bk-info"); note.style.margin="0 0 12px";
+  box.append(info,row,actions,note);
+  let timer=null;
+  const mb=b=>b>=1073741824?(b/1073741824).toFixed(1)+" GB":Math.round(b/1048576)+" MB";
+  const showJob=j=>{
+    const run=j.status==="running";
+    go.disabled=run; stop.hidden=!run; inp.disabled=save.disabled=reset.disabled=run;
+    if(!j.status||j.status==="idle"){ note.textContent=""; note.classList.remove("auth-err"); return run; }
+    note.classList.toggle("auth-err",j.status==="error");
+    note.textContent=run&&j.phase==="copying"
+      ? "Copying "+j.done+" / "+j.total+" songs · "+mb(j.bytes_done)+" of "+mb(j.bytes)
+      : j.message||"";
+    return run;
+  };
+  const poll=async()=>{
+    clearTimeout(timer);
+    let j; try{ const r=await fetch("api/pull/job"); if(!r.ok) return; j=(await r.json()).job; }catch(e){ return; }
+    const was=box._running; box._running=showJob(j);
+    if(box._running) timer=setTimeout(poll,1200);
+    else if(was&&j.added) doScan();                    // the server already started it; this just follows along and reloads
+  };
+  const showSrc=d=>{ inp.value=d.source; reset.hidden=!d.custom; };
+  fetch("api/pull").then(r=>r.ok?r.json():null).then(d=>{ if(d){ showSrc(d); box._running=showJob(d.job||{});
+    if(box._running) timer=setTimeout(poll,1200); } }).catch(()=>{});
+  const saveSrc=async v=>{
+    const r=await fetch("api/pull/source",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({source:v})});
+    if(!r.ok) return fail(r);
+    showSrc(await r.json()); toast("Source saved");
+  };
+  save.onclick=()=>saveSrc(inp.value); reset.onclick=()=>saveSrc("");
+  inp.addEventListener("keydown",e=>{ if(e.key==="Enter") save.click(); });
+  go.onclick=async()=>{
+    const r=await fetch("api/pull/start",{method:"POST"});
+    if(!r.ok) return fail(r);
+    box._running=true; note.classList.remove("auth-err"); note.textContent="Connecting…"; go.disabled=true; stop.hidden=false;
+    inp.disabled=save.disabled=reset.disabled=true; timer=setTimeout(poll,800);
+  };
+  stop.onclick=()=>fetch("api/pull/cancel",{method:"POST"});
+  return box;
+}
+
 // ---- backups (owner only; server does the work, see /api/backups) ----
 function backupsModal(){
   const card=el("div","card"); const m=modal(card);
@@ -1773,6 +1825,7 @@ function backupsModal(){
     const dlrow=el("div","bk-acts"), dlb=el("button","btn"); dlb.textContent="⬇ Download from YouTube…";
     dlb.onclick=()=>{ m.remove(); downloadModal(); };
     dlrow.appendChild(dlb); card.append(dli,drow,dnote,dlrow);
+    card.appendChild(pullSection(fail));
     card.insertAdjacentHTML("beforeend",'<h3 class="sec">Backups</h3>');
     const info=el("div","bk-info");
     info.textContent=!d.enabled?"Backups are disabled (BACKUP_DIR is empty).":
