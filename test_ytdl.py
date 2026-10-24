@@ -56,7 +56,7 @@ class Scratch(unittest.TestCase):
             return c
 
         c = db()
-        c.executescript("CREATE TABLE tracks (id INTEGER PRIMARY KEY, path TEXT, title TEXT, artist TEXT, mtime REAL);"
+        c.executescript("CREATE TABLE tracks (id INTEGER PRIMARY KEY, path TEXT, title TEXT, artist TEXT, mtime REAL, missing INTEGER DEFAULT 0);"
                         "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);")
         c.commit()
         c.close()

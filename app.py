@@ -135,7 +135,8 @@ def init_db():
             has_art INTEGER DEFAULT 0, art_ext TEXT,
             added_at REAL, last_scan INTEGER DEFAULT 0,
             play_count INTEGER DEFAULT 0, liked INTEGER DEFAULT 0,
-            last_played_at REAL
+            last_played_at REAL,
+            missing INTEGER DEFAULT 0
         );
         CREATE TABLE IF NOT EXISTS playlists (
             id INTEGER PRIMARY KEY,
@@ -157,6 +158,14 @@ def init_db():
             FOREIGN KEY (track_id) REFERENCES tracks(id) ON DELETE CASCADE
         );
         """)
+
+def migrate_db():
+    """Columns added after the first release (also needed after restoring an older backup)."""
+    with db() as c:
+        cols = {r[1] for r in c.execute("PRAGMA table_info(tracks)")}
+        if "missing" not in cols:
+            # missing=1: the file is gone but the row stays because likes / playlists / history hang on it
+            c.execute("ALTER TABLE tracks ADD COLUMN missing INTEGER DEFAULT 0")
 
 # --- Metadata reading (mutagen) -------------------------------------------
 def read_metadata(path: str):
@@ -217,7 +226,7 @@ def read_metadata(path: str):
 
 # --- Scanning --------------------------------------------------------------
 SCAN = {"running": False, "scanned": 0, "total": 0, "added": 0,
-        "updated": 0, "removed": 0, "error": None, "finished_at": None}
+        "updated": 0, "removed": 0, "moved": 0, "missing": 0, "merged": 0, "error": None, "finished_at": None}
 SCAN_LOCK = threading.Lock()
 
 # --- Cross-device sync ---
@@ -231,7 +240,22 @@ _SYNC_LISTENERS: dict[str, _queue.Queue] = {}  # read-only guests: get state/rol
 _SYNC_OUTPUT: str | None = None               # cid that currently owns audio
 _SYNC_STATE: dict = {}                        # last full state published by the output
 
+def _fp(size, duration, title, artist, album):
+    """What identifies a song when its path changes: same bytes + same tags (moves keep both)."""
+    return (size, round(duration or 0, 1), title or "", artist or "", album or "")
+
 def _scan_worker():
+    """Index every file in the music folders.
+
+    A song is a row that likes, playlists and history hang on, so it must survive being moved:
+      * a file at a new path that matches a row whose file vanished (same size + tags, or same size
+        and mtime) takes that row over -- same id, new path;
+      * a row whose file is gone but which has likes / playlists / history is kept as missing=1
+        (hidden from the library) and re-attaches when the file shows up again, wherever it is;
+      * if a copy of such a song exists elsewhere (copied first, deleted the original later), the
+        likes / playlist entries / history move over to the copy;
+      * only rows with no user data at all are deleted.
+    """
     global SCAN
     try:
         folders = roots.roots()
@@ -244,22 +268,50 @@ def _scan_worker():
 
         conn = db()
         cur = conn.cursor()
-        scan_id = int(time.time())
+        # strictly increasing: two scans within one second must not share an id, or the second couldn't
+        # tell which rows the first one saw
+        scan_id = max(int(time.time()), cur.execute("SELECT COALESCE(MAX(last_scan),0) FROM tracks").fetchone()[0] + 1)
         cur.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('last_scan',?)", (str(scan_id),))
 
         existing = {row["path"]: row for row in cur.execute(
-            "SELECT path,id,mtime,size,has_art,art_ext FROM tracks")}
+            "SELECT path,id,mtime,size,has_art,art_ext,title,artist,album,duration,missing FROM tracks")}
 
-        added = updated = 0
+        # rows whose file is not among the scanned ones: candidates for "this new file is that song, moved"
+        file_set = {str(p) for p in files}
+        lost = [row for path, row in existing.items() if path not in file_set]
+        lost_fp, lost_stat, claimed = {}, {}, set()
+        for row in lost:
+            lost_fp.setdefault(_fp(row["size"], row["duration"], row["title"], row["artist"], row["album"]), []).append(row)
+            lost_stat.setdefault((row["size"], row["mtime"]), []).append(row)
+        if any(not r["missing"] for r in lost):
+            try:                   # one rolling snapshot from before anything is touched
+                snap = db(); keep = sqlite3.connect(DATA_DIR / "pre-scan.db")
+                try:
+                    snap.backup(keep)
+                finally:
+                    keep.close(); snap.close()
+            except Exception:
+                pass
+
+        def claim(size, mtime, duration, title, artist, album):
+            for r in lost_fp.get(_fp(size, duration, title, artist, album), ()):
+                if r["id"] not in claimed:
+                    claimed.add(r["id"]); return r
+            for r in lost_stat.get((size, mtime), ()):          # tags edited while moving: same bytes-length + mtime
+                if r["id"] not in claimed and abs((r["duration"] or 0) - (duration or 0)) < 1.0:
+                    claimed.add(r["id"]); return r
+            return None
+
+        added = updated = moved = 0
         for p in files:
             SCAN["scanned"] += 1
             sp = str(p)
             st = p.stat()
             row = existing.get(sp)
 
-            # Skip unchanged files (fast re-scan); just mark as seen.
+            # Skip unchanged files (fast re-scan); just mark as seen (and bring back a row that was missing).
             if row and row["mtime"] == st.st_mtime and row["size"] == st.st_size:
-                cur.execute("UPDATE tracks SET last_scan=? WHERE id=?", (scan_id, row["id"]))
+                cur.execute("UPDATE tracks SET last_scan=?, missing=0 WHERE id=?", (scan_id, row["id"]))
                 continue
 
             title, artist, album, album_artist, track_no, duration, art, art_mime = read_metadata(sp)
@@ -273,11 +325,16 @@ def _scan_worker():
                 has_art = 1
                 art_ext = ".png" if art_mime == "image/png" else ".jpg"
 
-            if row:  # update existing
-                cur.execute("""UPDATE tracks SET title=?,artist=?,album=?,album_artist=?,
-                    track_no=?,duration=?,ext=?,size=?,mtime=?,has_art=?,art_ext=?,last_scan=?
+            if row is None:
+                row = claim(st.st_size, st.st_mtime, duration, title, artist, album)
+                if row is not None:
+                    moved += 1
+
+            if row:  # update existing (or a moved song: same row, new path)
+                cur.execute("""UPDATE tracks SET path=?,title=?,artist=?,album=?,album_artist=?,
+                    track_no=?,duration=?,ext=?,size=?,mtime=?,has_art=?,art_ext=?,last_scan=?,missing=0
                     WHERE id=?""",
-                    (title, artist, album, album_artist, track_no, duration, ext,
+                    (sp, title, artist, album, album_artist, track_no, duration, ext,
                      st.st_size, st.st_mtime, has_art, art_ext, scan_id, row["id"]))
                 tid = row["id"]
                 # clear stale art if format changed / removed
@@ -299,15 +356,43 @@ def _scan_worker():
             if art and art_ext:
                 (ART_DIR / f"{tid}{art_ext}").write_bytes(art)
 
-            SCAN["added"], SCAN["updated"] = added, updated
+            SCAN["added"], SCAN["updated"], SCAN["moved"] = added, updated, moved
 
-        # Remove tracks whose files are gone.
-        gone = list(cur.execute("SELECT id,art_ext FROM tracks WHERE last_scan!=?", (scan_id,)))
-        for r in gone:
-            if r["art_ext"]:
-                (ART_DIR / f"{r['id']}{r['art_ext']}").unlink(missing_ok=True)
-        cur.execute("DELETE FROM tracks WHERE last_scan!=?", (scan_id,))
-        SCAN["removed"] = len(gone)
+        # Rows not seen this scan: delete the ones nothing hangs on, keep the rest as missing.
+        gone = list(cur.execute("""SELECT id,art_ext,size,mtime,duration,title,artist,album,liked,play_count,
+                last_played_at, missing,
+                EXISTS(SELECT 1 FROM playlist_tracks WHERE track_id=tracks.id) AS in_pl,
+                EXISTS(SELECT 1 FROM history WHERE track_id=tracks.id) AS in_hist
+            FROM tracks WHERE last_scan!=?""", (scan_id,)))
+        alive_fp, alive_stat = {}, {}
+        if any(g["liked"] or g["play_count"] or g["in_pl"] or g["in_hist"] for g in gone):
+            for a in cur.execute("SELECT id,size,mtime,duration,title,artist,album FROM tracks WHERE last_scan=?", (scan_id,)):
+                alive_fp.setdefault(_fp(a["size"], a["duration"], a["title"], a["artist"], a["album"]), []).append(a["id"])
+                alive_stat.setdefault((a["size"], a["mtime"]), []).append(a["id"])
+        removed = kept = merged = 0
+        for g in gone:
+            if not (g["liked"] or g["play_count"] or g["in_pl"] or g["in_hist"]):
+                if g["art_ext"]:
+                    (ART_DIR / f"{g['id']}{g['art_ext']}").unlink(missing_ok=True)
+                cur.execute("DELETE FROM tracks WHERE id=?", (g["id"],))
+                removed += 1
+                continue
+            sid = next(iter(alive_fp.get(_fp(g["size"], g["duration"], g["title"], g["artist"], g["album"]), [])
+                            or alive_stat.get((g["size"], g["mtime"]), [])), None)
+            if sid is not None:    # a copy of this song is in the library: hand everything over to it
+                cur.execute("""UPDATE tracks SET liked=MAX(liked,?), play_count=play_count+?,
+                    last_played_at=COALESCE(MAX(last_played_at,?), last_played_at, ?) WHERE id=?""",
+                    (g["liked"] or 0, g["play_count"] or 0, g["last_played_at"], g["last_played_at"], sid))
+                cur.execute("UPDATE OR IGNORE playlist_tracks SET track_id=? WHERE track_id=?", (sid, g["id"]))
+                cur.execute("UPDATE history SET track_id=? WHERE track_id=?", (sid, g["id"]))
+                if g["art_ext"]:
+                    (ART_DIR / f"{g['id']}{g['art_ext']}").unlink(missing_ok=True)
+                cur.execute("DELETE FROM tracks WHERE id=?", (g["id"],))     # cascades whatever was left over
+                merged += 1
+            else:
+                cur.execute("UPDATE tracks SET missing=1 WHERE id=?", (g["id"],))
+                kept += 1
+        SCAN["removed"], SCAN["missing"], SCAN["merged"] = removed, kept, merged
 
         conn.commit()
         conn.close()
@@ -328,6 +413,7 @@ def login_gate(request: Request):
 
 app = FastAPI(title="Music", dependencies=[Depends(login_gate)])
 init_db()
+migrate_db()
 import roots                                  # noqa: E402  (the library's music folders, see roots.py)
 roots.init(MUSIC_DIR, db)
 import ytdl                                   # noqa: E402  (needs init_db's connection helper)
@@ -349,7 +435,7 @@ def track_dict(r: sqlite3.Row):
 @app.get("/api/tracks")
 def get_tracks():
     with db() as c:
-        rows = c.execute("SELECT * FROM tracks ORDER BY album_artist, album, track_no, title")
+        rows = c.execute("SELECT * FROM tracks WHERE missing=0 ORDER BY album_artist, album, track_no, title")
         return [track_dict(r) for r in rows]
 
 # --- Live ALAC -> WAV transcode ---------------------------------------------
@@ -527,7 +613,7 @@ def _start_scan() -> bool:
     with SCAN_LOCK:
         if SCAN["running"]:
             return False
-        for k in ("scanned", "total", "added", "updated", "removed"):
+        for k in ("scanned", "total", "added", "updated", "removed", "moved", "missing", "merged"):
             SCAN[k] = 0
         SCAN["error"] = None
         SCAN["finished_at"] = None
@@ -635,6 +721,7 @@ def _restore_from(path: Path):
             src.backup(live)
         finally:
             keep.close(); live.close(); src.close()
+    migrate_db()                            # an older backup may predate newer columns
 
 def _backup_info(p: Path) -> dict:
     st = p.stat()
@@ -760,9 +847,10 @@ def _folders_info():
         out = []
         for f in roots.config():
             pre = f["path"].rstrip("/") + "/"
-            n = c.execute("SELECT COUNT(*) FROM tracks WHERE substr(path,1,?)=?", (len(pre), pre)).fetchone()[0]
+            n = c.execute("SELECT COUNT(*) FROM tracks WHERE missing=0 AND substr(path,1,?)=?", (len(pre), pre)).fetchone()[0]
             out.append({**f, "exists": os.path.isdir(f["path"]), "tracks": n})
-    return {"folders": out, "custom": roots.is_custom(), "default": str(MUSIC_DIR)}
+        missing = c.execute("SELECT COUNT(*) FROM tracks WHERE missing=1").fetchone()[0]
+    return {"folders": out, "custom": roots.is_custom(), "default": str(MUSIC_DIR), "missing": missing}
 
 @app.get("/api/folders", dependencies=OWNER)
 def folders_list():
@@ -936,7 +1024,7 @@ def history(limit: int = HISTORY_MAX):
     limit = max(1, min(limit, HISTORY_MAX))     # phones choked on long lists
     with db() as c:
         rows = c.execute("""SELECT h.played_at, t.* FROM history h
-            JOIN tracks t ON t.id=h.track_id ORDER BY h.played_at DESC LIMIT ?""", (limit,))
+            JOIN tracks t ON t.id=h.track_id WHERE t.missing=0 ORDER BY h.played_at DESC LIMIT ?""", (limit,))
         out = []
         for r in rows:
             d = track_dict(r)
@@ -960,6 +1048,8 @@ def list_playlists():
                     "SELECT track_id FROM playlist_tracks WHERE playlist_id=? ORDER BY position",
                     (p["id"],))]
                 d["trackIds"] = tids
+                d["missing"] = c.execute("""SELECT COUNT(*) FROM playlist_tracks pt JOIN tracks t ON t.id=pt.track_id
+                    WHERE pt.playlist_id=? AND t.missing=1""", (p["id"],)).fetchone()[0]
             out.append(d)
         return out
 

@@ -770,7 +770,7 @@ def local_index(url):
     sig = None
     try:
         with _conn() as c:
-            for r in c.execute("SELECT title, artist, path FROM tracks"):
+            for r in c.execute("SELECT title, artist, path FROM tracks WHERE missing=0"):
                 label = " - ".join(x for x in ((r["artist"] or "").strip(), (r["title"] or "").strip()) if x)
                 kt = name_key(r["title"])
                 for k in (kt, name_key((r["artist"] or "") + (r["title"] or "")),
@@ -779,7 +779,7 @@ def local_index(url):
                         lib.setdefault(k, label)
                 tracks.append({"kt": kt, "label": label,
                                "ka": [k for k in (name_key(a) for a in _ARTIST_SPLIT.split(r["artist"] or "")) if len(k) >= 2]})
-            sig = tuple(c.execute("SELECT COUNT(*), COALESCE(MAX(id),0), COALESCE(SUM(mtime),0) FROM tracks").fetchone())
+            sig = tuple(c.execute("SELECT COUNT(*), COALESCE(MAX(id),0), COALESCE(SUM(mtime),0) FROM tracks WHERE missing=0").fetchone())
     except sqlite3.Error:
         pass
     if _FUZZY["sig"] != sig:

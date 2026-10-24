@@ -184,3 +184,9 @@ cython_debug/
 # YouTube music downloader: saved cookies (secret) + Deno runtime installed by install.sh
 data/ytdl/
 .deno/
+
+# runtime snapshots / covers / staging
+data/pre-scan.db
+data/pre-restore.db
+data/plcover/
+data/pull/

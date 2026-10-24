@@ -948,7 +948,7 @@ function render(){
     back.onclick=()=>{ S.openPlaylist=null; S.view="playlists"; render(); };
     listEl.appendChild(back);
     const pl=S.openPlaylist, head=el("div","pl-head"), pn=el("div","pn"), mb=el("button","more");
-    pn.textContent=pl.name; const sm=el("small"); sm.textContent=(pl.isSmart?"Smart playlist · ":"")+playlistIds(pl).length+" tracks"; pn.appendChild(sm);
+    pn.textContent=pl.name; const sm=el("small"); sm.textContent=(pl.isSmart?"Smart playlist · ":"")+playlistIds(pl).length+" tracks"+(pl.missing?" · "+pl.missing+" missing (their files aren’t in any music folder right now)":""); pn.appendChild(sm);
     mb.textContent="⋯"; mb.title="More"; mb.setAttribute("aria-label","Playlist menu"); mb.onclick=e=>playlistMenu(e.currentTarget,pl);
     head.append(plArt(pl),pn,mb); listEl.appendChild(head);
   }
@@ -1054,7 +1054,7 @@ function renderPlaylistIndex(){
     const n=el("div","nm"); n.textContent=p.name;
     const sub=el("div","sub");
     sub.textContent = p.isSmart ? "Smart · "+smartIds(p.rules||{}).length+" tracks"
-                                : (p.trackIds||[]).length+" tracks";
+                                : playlistIds(p).length+" tracks"+(p.missing?" · "+p.missing+" missing":"");
     const more=el("button","more"); more.textContent="⋯"; more.title="More"; more.setAttribute("aria-label","Playlist menu");
     more.onclick=e=>{ e.stopPropagation(); playlistMenu(e.currentTarget,p); };
     const pt=el("div","pt"); pt.append(n,sub);
@@ -1872,10 +1872,11 @@ function foldersSection(fail){
   const box=el("div");
   box.insertAdjacentHTML("beforeend",'<h3 class="sec">Music folders</h3>');
   const info=el("div","bk-info");
-  info.textContent="The library reads songs from all of these. New songs (pulled from another computer) go into the main one. Removing a folder only stops reading it - no files are deleted.";
+  info.textContent="The library reads songs from all of these. New songs (pulled from another computer) go into the main one. Removing a folder only stops reading it - no files are deleted. Moving songs between folders (or inside one) keeps their likes, playlists and history: the next scan recognises them.";
+  const miss=el("div","bk-info");
   const list=el("div"), row=el("div","bk-acts"), inp=el("input"), add=el("button","btn");
   inp.placeholder="/full/path/to/another/music/folder"; inp.style.flex="1"; inp.maxLength=500; inp.autocapitalize="off"; inp.spellcheck=false;
-  add.textContent="Add"; row.append(inp,add); box.append(info,list,row);
+  add.textContent="Add"; row.append(inp,add); box.append(info,list,row,miss);
   let cur=[];
   const paint=d=>{
     cur=d.folders.map(f=>({path:f.path,main:f.main}));
@@ -1886,11 +1887,12 @@ function foldersSection(fail){
       r.appendChild(nm);
       if(!f.main){ const mk=el("button","btn"); mk.textContent="Make main"; mk.onclick=()=>save(cur.map(x=>({path:x.path,main:x.path===f.path}))); r.appendChild(mk); }
       if(d.folders.length>1){ const rm=el("button","btn"); rm.textContent="✕"; rm.title="Stop reading this folder (files stay)";
-        rm.onclick=()=>{ if(!confirm("Stop reading “"+f.path+"”?\nIts "+f.tracks+" songs leave the library on the next scan - likes and playlist entries for them are lost. The files stay on disk.")) return;
+        rm.onclick=()=>{ if(!confirm("Stop reading “"+f.path+"”?\nIts "+f.tracks+" songs leave the library on the next scan. Likes, playlist entries and history are kept and come back if the same files show up in another folder. The files stay on disk.")) return;
           save(cur.filter(x=>x.path!==f.path).map(x=>({path:x.path,main:x.main&&x.path!==f.path}))); };
         r.appendChild(rm); }
       list.appendChild(r);
     });
+    miss.textContent=d.missing?d.missing+" song"+(d.missing===1?" is":"s are")+" missing right now (file not found). They’re kept with their likes and playlists and return when the file is back in any folder and you scan.":"";
     if(d.custom){ const rs=el("button","btn"); rs.textContent="Reset to default ("+d.default+")"; rs.style.margin="4px 0 10px";
       rs.onclick=()=>save([]); list.appendChild(rs); }
   };
@@ -2326,7 +2328,7 @@ async function doScan(){
       clearInterval(poll); scanBtn.disabled=false; scanBtn.textContent="Scan";
       if(s.error){ toast("Scan failed: "+s.error); return; }
       await loadTracks(); await loadPlaylists();
-      toast("Added "+s.added+" · Updated "+s.updated+(s.removed?" · Removed "+s.removed:""));
+      toast("Added "+s.added+" · Updated "+s.updated+(s.moved?" · Moved "+s.moved:"")+(s.removed?" · Removed "+s.removed:"")+(s.missing?" · Missing "+s.missing:""));
     }
   },600);
 }

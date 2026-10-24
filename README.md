@@ -38,6 +38,10 @@ locally, which is never saved to the server.
 
 ⚙ Settings → **Pull from another computer** copies songs that aren't in the library yet from a folder on another machine (default: the Apple Music folder on the Mac, `equa@192.168.1.73:/Users/equa/Music/Music/Media.localized/Music/`) and rescans. Change the source to any `user@ip:/full/path`. It uses `rsync` over `ssh`, so the server's user needs key-based ssh access to that machine (`ssh-copy-id user@ip`); nothing is ever deleted or overwritten.
 
+## Moving songs around
+
+Move or rename song files freely (between folders, or inside one), then press **Scan** (or let a folder change / pull do it). The scan recognises a moved song by its size and tags, keeps its library entry, and so keeps likes, playlist membership and order, play counts and history. A song whose file isn't in any music folder at that moment stays in its playlists as *missing* (shown as "N missing" on the playlist) and comes back when the file reappears. Songs you never liked, queued in a playlist or played are simply forgotten when their file goes. A snapshot of the database from before every such scan is kept in `data/pre-scan.db`.
+
 ## Music folders
 
 ⚙ Settings → **Music folders** lists the folders the library reads from (by default the one you installed with). Add as many as you like with their full path, mark one as **main** (new songs pulled from another computer are saved there) or remove one. Removing only stops reading it - no files are deleted - but its songs leave the library, along with likes and playlist entries for them. A folder that isn't there (e.g. an unmounted drive) stops the scan with an error instead of silently emptying the library.
