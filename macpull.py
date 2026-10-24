@@ -33,11 +33,22 @@ FILTERS = ["--include=*/"] + [f"--include=*{e}" for e in AUDIO_EXTS] + ["--exclu
 _CFG = {}
 
 
-def init(data_dir, music_dir, db_factory, after=None):
-    """Called once by app.py (and by the tests with scratch folders). `after()` runs when new songs landed."""
-    _CFG.update(data=Path(data_dir), music=Path(music_dir), db=db_factory, after=after)
+def init(data_dir, music_dir, db_factory, after=None, roots=None):
+    """Called once by app.py (and by the tests with scratch folders). `music_dir` is the folder new songs
+    are saved into (a path, or a callable returning it: the main music folder); `roots` (optional callable)
+    lists every library folder, all of which count as "already here". `after()` runs when new songs landed."""
+    _CFG.update(data=Path(data_dir), music=music_dir, roots=roots, db=db_factory, after=after)
     with _conn():
         pass
+
+
+def _main():
+    m = _CFG["music"]
+    return Path(m() if callable(m) else m)
+
+
+def _all_roots():
+    return [Path(r) for r in _CFG["roots"]()] if _CFG.get("roots") else [_main()]
 
 
 def _conn():
@@ -93,13 +104,14 @@ def _nfc(s):
     return unicodedata.normalize("NFC", s)
 
 
-def local_keys(music):
-    """NFC relative paths of every audio file already in the library folder."""
+def local_keys(folders):
+    """NFC relative paths of every audio file already in the library folder(s)."""
     keys = set()
-    for d, _, files in os.walk(music):
-        for f in files:
-            if f.lower().endswith(AUDIO_EXTS):
-                keys.add(_nfc(os.path.relpath(os.path.join(d, f), music)))
+    for music in ([folders] if isinstance(folders, (str, Path)) else folders):
+        for d, _, files in os.walk(music):
+            for f in files:
+                if f.lower().endswith(AUDIO_EXTS):
+                    keys.add(_nfc(os.path.relpath(os.path.join(d, f), music)))
     return keys
 
 
@@ -170,9 +182,10 @@ def start():
     """-> (ok, error). One pull at a time; the work happens in a daemon thread."""
     if not shutil.which("rsync") or not shutil.which("ssh"):
         return False, "rsync and ssh must be installed on the server."
-    music = _CFG["music"]
-    if not music.is_dir():
-        return False, f"Music folder not found: {music}"
+    music = _main()
+    for r in _all_roots():                 # an unmounted folder would make everything in it look "new"
+        if not r.is_dir():
+            return False, f"Music folder not found: {r}"
     with _JOB_LOCK:
         if JOB.get("status") == "running":
             return False, "A pull is already running."
@@ -208,7 +221,7 @@ def _tail(text, n=3):
 
 
 def _run_inner():
-    music, src = _CFG["music"], get_source()
+    music, src = _main(), get_source()
     base = ["-8", "-e", SSH]
     # 1. what does the other side have?
     p = _rsync(["-r", "--list-only", *base, *FILTERS, src])
@@ -218,7 +231,7 @@ def _run_inner():
     listing = parse_listing(out.decode("utf-8", "replace"))
     if p.returncode not in (0, 23) or (p.returncode == 23 and not listing):
         return _set(status="error", message="Couldn't read " + src + ": " + (_tail(err.decode("utf-8", "replace")) or f"rsync exit {p.returncode}"))
-    new, long_ = pick_new(listing, local_keys(music))
+    new, long_ = pick_new(listing, local_keys(_all_roots()))
     total_bytes = sum(s for _, s in new)
     _set(listed=len(listing), total=len(new), bytes=total_bytes, skipped_long=len(long_),
          new=[r for r, _ in new[:200]])

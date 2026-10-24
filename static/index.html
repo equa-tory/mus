@@ -1571,13 +1571,14 @@ function fillSideQueue(forceCur){
   else if(rel!=null&&c1) body.scrollTop=c1.offsetTop-rel;
   else body.scrollTop=keep;
 }
+const HIST_MAX=20;
 async function loadSideHistory(){
   try{
-    const arr=await (await fetch("api/history?limit=30")).json();
+    const arr=await (await fetch("api/history?limit=21")).json();
     arr.forEach(t=>{ if(!S.byId.has(t.id)) S.byId.set(t.id,t); });
     const ids=arr.map(t=>t.id);                    // newest first
     if(ids.length&&ids[0]===currentId()) ids.shift(); // already counted as played: it's "now playing"
-    S.hist=ids.slice(0,25).reverse();
+    S.hist=ids.slice(0,HIST_MAX).reverse();
   }catch(e){}
 }
 let _shT=null;
@@ -1866,12 +1867,50 @@ function renamePlaylist(p){
     body:JSON.stringify({name:inp.value})}); await loadPlaylists(); m.remove(); render(); };
 }
 
+// ---- music folders: any number, one is the main one (⚙ Settings; /api/folders, logic in roots.py) ----
+function foldersSection(fail){
+  const box=el("div");
+  box.insertAdjacentHTML("beforeend",'<h3 class="sec">Music folders</h3>');
+  const info=el("div","bk-info");
+  info.textContent="The library reads songs from all of these. New songs (pulled from another computer) go into the main one. Removing a folder only stops reading it - no files are deleted.";
+  const list=el("div"), row=el("div","bk-acts"), inp=el("input"), add=el("button","btn");
+  inp.placeholder="/full/path/to/another/music/folder"; inp.style.flex="1"; inp.maxLength=500; inp.autocapitalize="off"; inp.spellcheck=false;
+  add.textContent="Add"; row.append(inp,add); box.append(info,list,row);
+  let cur=[];
+  const paint=d=>{
+    cur=d.folders.map(f=>({path:f.path,main:f.main}));
+    list.innerHTML="";
+    d.folders.forEach(f=>{
+      const r=el("div","bk-row"), nm=el("div","nm"); nm.textContent=f.path;
+      const sm=el("small"); sm.textContent=(f.exists?f.tracks+" songs":"⚠ not found")+(f.main?" · main":""); nm.appendChild(sm);
+      r.appendChild(nm);
+      if(!f.main){ const mk=el("button","btn"); mk.textContent="Make main"; mk.onclick=()=>save(cur.map(x=>({path:x.path,main:x.path===f.path}))); r.appendChild(mk); }
+      if(d.folders.length>1){ const rm=el("button","btn"); rm.textContent="✕"; rm.title="Stop reading this folder (files stay)";
+        rm.onclick=()=>{ if(!confirm("Stop reading “"+f.path+"”?\nIts "+f.tracks+" songs leave the library on the next scan - likes and playlist entries for them are lost. The files stay on disk.")) return;
+          save(cur.filter(x=>x.path!==f.path).map(x=>({path:x.path,main:x.main&&x.path!==f.path}))); };
+        r.appendChild(rm); }
+      list.appendChild(r);
+    });
+    if(d.custom){ const rs=el("button","btn"); rs.textContent="Reset to default ("+d.default+")"; rs.style.margin="4px 0 10px";
+      rs.onclick=()=>save([]); list.appendChild(rs); }
+  };
+  async function save(folders){
+    const r=await fetch("api/folders",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({folders})}).catch(()=>null);
+    if(!r||!r.ok) return r?fail(r):toast("Couldn’t reach the server");
+    paint(await r.json()); inp.value=""; toast("Folders saved — scanning"); doScan();
+  }
+  add.onclick=()=>{ const v=inp.value.trim(); if(!v) return; save([...cur,{path:v,main:false}]); };
+  inp.addEventListener("keydown",e=>{ if(e.key==="Enter") add.click(); });
+  fetch("api/folders").then(r=>r.ok?r.json():null).then(d=>{ if(d) paint(d); }).catch(()=>{});
+  return box;
+}
+
 // ---- pull new songs from another machine over ssh (⚙ Settings; /api/pull, logic in macpull.py) ----
 function pullSection(fail){
   const box=el("div");
   box.insertAdjacentHTML("beforeend",'<h3 class="sec">Pull from another computer</h3>');
   const info=el("div","bk-info");
-  info.textContent="Copies songs that aren’t in the library yet over ssh (key login, nothing is overwritten or deleted), then rescans. Source as user@ip:/full/path:";
+  info.textContent="Copies songs that aren’t in any music folder yet into the main folder over ssh (key login, nothing is overwritten or deleted), then rescans. Source as user@ip:/full/path:";
   const row=el("div","bk-acts"), inp=el("input"), save=el("button","btn"), reset=el("button","btn");
   inp.placeholder="user@ip:/full/path"; inp.style.flex="1"; inp.maxLength=500; inp.autocapitalize="off"; inp.spellcheck=false;
   save.textContent="Save"; reset.textContent="Default"; reset.hidden=true; row.append(inp,save,reset);
@@ -1947,31 +1986,26 @@ function backupsModal(){
     };
     ain.addEventListener("keydown",e=>{ if(e.key==="Enter") asave.click(); });
     arow.append(ain,asave); card.append(ainfo,arow);
+    card.appendChild(foldersSection(fail));
     card.insertAdjacentHTML("beforeend",'<h3 class="sec">Download music</h3>');
     const dli=el("div","bk-info");
-    dli.textContent="Pick songs from a saved YouTube playlist and save them as m4a (with cover, artist and album) into this folder - not into the music library:";
-    const drow=el("div","bk-acts"), din=el("input"), dsave=el("button","btn"), dreset=el("button","btn");
-    din.placeholder="/mnt/videos/Loop"; din.style.flex="1"; din.maxLength=500; din.autocapitalize="off"; din.spellcheck=false;
-    dsave.textContent="Save"; dreset.textContent="Default"; dreset.hidden=true;
-    const dnote=el("div","bk-info"); dnote.style.margin="0 0 12px";
-    const showDir=d=>{ din.value=d.dir; dreset.hidden=!d.custom;
-      dnote.textContent=(d.free!=null?bytes0(d.free)+" free"+(d.total?" of "+bytes0(d.total):"")+" · ":"")+
-        "Files already saved in a previous folder are no longer recognised as downloaded."; };
-    const bytes0=b=>b>=1073741824?(b/1073741824).toFixed(1)+" GB":Math.round(b/1048576)+" MB";
-    fetch("api/dl/dir").then(r=>r.ok?r.json():null).then(d=>{ if(d) showDir(d); }).catch(()=>{});
-    const saveDir=async v=>{
-      const r=await fetch("api/dl/dir",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({path:v})});
-      if(!r.ok) return fail(r);
-      showDir(await r.json()); toast("Download folder saved");
-    };
-    dsave.onclick=()=>saveDir(din.value); dreset.onclick=()=>saveDir("");
-    din.addEventListener("keydown",e=>{ if(e.key==="Enter") dsave.click(); });
-    drow.append(din,dsave,dreset);
+    dli.textContent="Pick songs from a saved YouTube playlist and save them as m4a (with cover, artist and album). The download folder is set inside.";
     const dlrow=el("div","bk-acts"), dlb=el("button","btn"); dlb.textContent="⬇ Download from YouTube…";
     dlb.onclick=()=>{ m.remove(); downloadModal(); };
-    dlrow.appendChild(dlb); card.append(dli,drow,dnote,dlrow);
+    dlrow.appendChild(dlb); card.append(dli,dlrow);
     card.appendChild(pullSection(fail));
     card.insertAdjacentHTML("beforeend",'<h3 class="sec">Backups</h3>');
+    const brow=el("div","bk-acts"), bin=el("input"), bsave=el("button","btn"), breset=el("button","btn");
+    bin.placeholder="/full/path/for/backups"; bin.value=d.dir; bin.style.flex="1"; bin.maxLength=500; bin.autocapitalize="off"; bin.spellcheck=false;
+    bsave.textContent="Save"; breset.textContent="Default"; breset.hidden=!d.custom; breset.title=d.default||"off";
+    const saveBk=async v=>{
+      const r=await fetch("api/backups/dir",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({path:v})});
+      if(!r.ok) return fail(r);
+      toast("Backup folder saved"); paint();
+    };
+    bsave.onclick=()=>saveBk(bin.value); breset.onclick=()=>saveBk("");
+    bin.addEventListener("keydown",e=>{ if(e.key==="Enter") bsave.click(); });
+    brow.append(bin,bsave,breset); card.appendChild(brow);
     const info=el("div","bk-info");
     info.textContent=!d.enabled?"Backups are disabled (BACKUP_DIR is empty).":
       (d.everyHours?"Every "+d.everyHours+" h":"Manual only")+" → "+d.dir+" · keeps "+d.keep+
@@ -2023,6 +2057,11 @@ function downloadModal(){
 
   card.innerHTML='<div class="dl-head"><h3>Download music</h3></div><div id="dlWarn"></div>'+
     '<div class="dl-note" id="dlWhere"></div>'+
+    '<details class="dl-sec" id="dlDirSec"><summary>Download folder</summary>'+
+      '<p>Songs are saved here as m4a - not into the music library. Songs already saved in a previous folder are no longer recognised as downloaded.</p>'+
+      '<div class="dl-row"><input type="text" id="dlDirIn" placeholder="/mnt/videos/Loop" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="500">'+
+        '<button class="btn accent" id="dlDirSave">Save</button><button class="btn" id="dlDirReset" hidden>Default</button></div>'+
+      '<div class="dl-note" id="dlDirMsg"></div></details>'+
     '<details class="dl-sec" id="dlCk"><summary>YouTube cookies <span class="dl-badge" id="dlCkBadge"></span></summary>'+
       '<p><b>Needed for downloads.</b> Without them YouTube often answers “Sign in to confirm you’re not a bot”. Paste them once - they stay on the server and are never shown again.</p>'+
       '<textarea id="dlCkText" spellcheck="false" autocomplete="off" autocapitalize="off" placeholder="Paste the cookies.txt contents, or the Cookie: header value"></textarea>'+
@@ -2051,7 +2090,7 @@ function downloadModal(){
     if(cookiesBad()) w.push("⚠ <b>Your YouTube cookies have expired or stopped working.</b> Downloading is switched off until you paste fresh ones.");
     q("#dlWarn").innerHTML=w.map(x=>'<div class="dl-warn">'+x+'</div>').join("");
     const d=t.disk||{};
-    q("#dlWhere").innerHTML="Saved as m4a into <b>"+esc(d.dir||"")+"</b> <span style='color:var(--muted2)'>(change it in ⚙ Settings)</span>"+(d.free!=null?" · "+bytes(d.free)+" free"+(d.total?" of "+bytes(d.total):""):"")+" · yt-dlp "+esc(t.version||"?");
+    q("#dlWhere").innerHTML="Saved as m4a into <b>"+esc(d.dir||"")+"</b>"+(d.free!=null?" · "+bytes(d.free)+" free"+(d.total?" of "+bytes(d.total):""):"")+" · yt-dlp "+esc(t.version||"?");
     const c=t.cookies||{}, b=q("#dlCkBadge");
     let txt, cls="dl-badge";
     if(!c.set){ txt="not set - required"; cls+=" bad"; q("#dlCk").open=true; }
@@ -2070,6 +2109,16 @@ function downloadModal(){
     q("#dlDel").hidden=!(t.sources||[]).length; q("#dlFetch").disabled=!(t.sources||[]).length;
     updateBar();
   }
+  async function loadDir(){
+    try{ const d=await api("GET","api/dl/dir"); q("#dlDirIn").value=d.dir||""; q("#dlDirReset").hidden=!d.custom; }catch(e){}
+  }
+  async function saveDir(v){
+    try{ await api("PUT","api/dl/dir",{path:v}); say(q("#dlDirMsg"),"Saved"); await loadDir(); await loadTools(); if(D.sid!=null) await loadSource(); }
+    catch(e){ say(q("#dlDirMsg"),e.message,true); }
+  }
+  q("#dlDirSave").onclick=()=>saveDir(q("#dlDirIn").value); q("#dlDirReset").onclick=()=>saveDir("");
+  q("#dlDirIn").addEventListener("keydown",e=>{ if(e.key==="Enter") q("#dlDirSave").click(); });
+  loadDir();
   async function loadTools(){ try{ D.tools=await api("GET","api/dl/tools"); }catch(e){ say(q("#dlMsg"),e.message,true); return; }
     if(D.sid==null&&(D.tools.sources||[]).length) D.sid=D.tools.sources[0].id;
     if(D.sid!=null&&!(D.tools.sources||[]).some(s=>s.id===D.sid)) D.sid=(D.tools.sources[0]||{}).id??null;
@@ -2298,9 +2347,9 @@ let st=null;
 $("#search").addEventListener("input",e=>{ clearTimeout(st);
   st=setTimeout(()=>{ S.search=e.target.value; render(); listEl.scrollTop=0; },120); });
 
-// ---- history ----
+// ---- history ---- (long lists made iPhones crawl; the server caps it at 20 too)
 async function loadHistory(){
-  const arr=await (await fetch("api/history?limit=200")).json();
+  const arr=await (await fetch("api/history?limit="+HIST_MAX)).json();
   // ensure tracks exist locally
   arr.forEach(t=>{ if(!S.byId.has(t.id)) S.byId.set(t.id,t); });
   S.historyIds=arr.map(t=>t.id);

@@ -234,10 +234,12 @@ _SYNC_STATE: dict = {}                        # last full state published by the
 def _scan_worker():
     global SCAN
     try:
-        if not MUSIC_DIR.exists():
-            raise FileNotFoundError(f"Music folder not found: {MUSIC_DIR}")
+        folders = roots.roots()
+        for r in folders:          # a missing folder (unmounted drive) must abort: skipping it would drop its songs
+            if not r.is_dir():
+                raise FileNotFoundError(f"Music folder not found: {r} - fix or remove it in Settings → Music folders")
 
-        files = [p for p in MUSIC_DIR.rglob("*") if p.suffix.lower() in AUDIO_EXTS and p.is_file()]
+        files = [p for r in folders for p in r.rglob("*") if p.suffix.lower() in AUDIO_EXTS and p.is_file()]
         SCAN["total"] = len(files)
 
         conn = db()
@@ -326,6 +328,8 @@ def login_gate(request: Request):
 
 app = FastAPI(title="Music", dependencies=[Depends(login_gate)])
 init_db()
+import roots                                  # noqa: E402  (the library's music folders, see roots.py)
+roots.init(MUSIC_DIR, db)
 import ytdl                                   # noqa: E402  (needs init_db's connection helper)
 ytdl.init(DATA_DIR, DOWNLOAD_DIR, db)
 
@@ -550,19 +554,27 @@ BACKUP_LOCK = threading.Lock()
 BACKUP = {"error": None}
 MAX_UPLOAD = 1 << 30
 
+def _bdir() -> Path | None:
+    """Backup folder: the one saved in Settings (meta `backup_dir`), else BACKUP_DIR from the environment."""
+    with db() as c:
+        row = c.execute("SELECT value FROM meta WHERE key='backup_dir'").fetchone()
+    return Path(row[0]) if row and row[0] else BACKUP_DIR
+
 def _backup_files() -> list[Path]:
-    if not BACKUP_DIR or not BACKUP_DIR.is_dir():
+    bd = _bdir()
+    if not bd or not bd.is_dir():
         return []
-    fs = [p for p in BACKUP_DIR.iterdir() if BACKUP_RE.match(p.name) and p.is_file()]
+    fs = [p for p in bd.iterdir() if BACKUP_RE.match(p.name) and p.is_file()]
     return sorted(fs, key=lambda p: p.name, reverse=True)
 
 def _make_backup() -> Path:
-    if not BACKUP_DIR:
-        raise HTTPException(400, "Backups are disabled (BACKUP_DIR is empty)")
+    bd = _bdir()
+    if not bd:
+        raise HTTPException(400, "Backups are disabled (no backup folder set)")
     with BACKUP_LOCK:
         try:
-            BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-            final = BACKUP_DIR / datetime.now().strftime("mus-%Y%m%d-%H%M%S.db")
+            bd.mkdir(parents=True, exist_ok=True)
+            final = bd / datetime.now().strftime("mus-%Y%m%d-%H%M%S.db")
             tmp = final.with_name(final.name + ".tmp")
             src = db(); dst = sqlite3.connect(tmp)
             try:
@@ -581,7 +593,7 @@ def _make_backup() -> Path:
 def _backup_loop():
     while True:
         wait = 3600.0
-        if BACKUP_DIR and BACKUP_EVERY_HOURS > 0:
+        if _bdir() and BACKUP_EVERY_HOURS > 0:
             fs = _backup_files()
             age = time.time() - fs[0].stat().st_mtime if fs else float("inf")
             due = BACKUP_EVERY_HOURS * 3600 - age
@@ -633,8 +645,36 @@ def backups_list():
     items = [_backup_info(p) for p in _backup_files()]
     last = items[0]["mtime"] if items else None
     nxt = last + BACKUP_EVERY_HOURS * 3600 if last and BACKUP_EVERY_HOURS else None
-    return {"enabled": bool(BACKUP_DIR), "dir": str(BACKUP_DIR or ""), "everyHours": BACKUP_EVERY_HOURS,
+    return {"enabled": bool(_bdir()), "dir": str(_bdir() or ""), "custom": _bdir() != BACKUP_DIR,
+            "default": str(BACKUP_DIR or ""), "everyHours": BACKUP_EVERY_HOURS,
             "keep": BACKUP_KEEP, "error": BACKUP["error"], "last": last, "next": nxt, "items": items}
+
+@app.put("/api/backups/dir", dependencies=OWNER)
+def backups_set_dir(body: dict = Body(...)):
+    """Where backups go. "" = back to BACKUP_DIR from the environment."""
+    raw = body.get("path", "")
+    if not isinstance(raw, str):
+        raise HTTPException(400, "path must be text")
+    raw = raw.strip()
+    if raw:
+        if len(raw) > 500 or "\n" in raw or "\x00" in raw:
+            raise HTTPException(400, "That doesn't look like a folder path")
+        p = Path(os.path.normpath(os.path.expanduser(raw)))
+        if not p.is_absolute():
+            raise HTTPException(400, "Use a full path (start it with /)")
+        try:
+            p.mkdir(parents=True, exist_ok=True)
+            probe = p / ".mus-write-test"
+            probe.write_bytes(b"x"); probe.unlink()
+        except OSError as e:
+            raise HTTPException(400, f"Can't write to {p}: {e.strerror or e}")
+    with db() as c:
+        if raw:
+            c.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('backup_dir',?)", (str(p),))
+        else:
+            c.execute("DELETE FROM meta WHERE key='backup_dir'")
+    BACKUP["error"] = None
+    return backups_list()
 
 @app.post("/api/backups", dependencies=OWNER)
 def backups_now():
@@ -658,7 +698,8 @@ async def backups_upload(request: Request):
     return {"ok": True}
 
 def _named_backup(name: str) -> Path:
-    p = BACKUP_DIR / name if BACKUP_DIR else None
+    bd = _bdir()
+    p = bd / name if bd else None
     if not p or not BACKUP_RE.match(name) or not p.is_file():
         raise HTTPException(404, "No such backup")
     return p
@@ -713,9 +754,33 @@ def follow_author(body: dict = Body(...)):
         c.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('following',?)", (json.dumps(nxt),))
         return _read_settings(c)
 
+# --- Music folders (owner only; logic in roots.py) ------------------------------
+def _folders_info():
+    with db() as c:
+        out = []
+        for f in roots.config():
+            pre = f["path"].rstrip("/") + "/"
+            n = c.execute("SELECT COUNT(*) FROM tracks WHERE substr(path,1,?)=?", (len(pre), pre)).fetchone()[0]
+            out.append({**f, "exists": os.path.isdir(f["path"]), "tracks": n})
+    return {"folders": out, "custom": roots.is_custom(), "default": str(MUSIC_DIR)}
+
+@app.get("/api/folders", dependencies=OWNER)
+def folders_list():
+    return _folders_info()
+
+@app.put("/api/folders", dependencies=OWNER)
+def folders_set(body: dict = Body(...)):
+    if SCAN["running"]:
+        raise HTTPException(409, "A scan is running - try again when it finishes")
+    try:
+        roots.set_config(body.get("folders", []))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return _folders_info()
+
 # --- Pull new songs from another machine over ssh (owner only; logic in macpull.py) ---
 import macpull                                # noqa: E402
-macpull.init(DATA_DIR, MUSIC_DIR, db, after=_start_scan)   # new songs landed -> rescan
+macpull.init(DATA_DIR, roots.main_root, db, after=_start_scan, roots=roots.roots)   # new songs landed -> rescan
 
 @app.get("/api/pull", dependencies=OWNER)
 def pull_info():
@@ -864,8 +929,11 @@ def play(track_id: int):
         c.execute("INSERT INTO history(track_id,played_at) VALUES(?,?)", (track_id, now))
     return {"ok": True}
 
+HISTORY_MAX = 20
+
 @app.get("/api/history")
-def history(limit: int = 100):
+def history(limit: int = HISTORY_MAX):
+    limit = max(1, min(limit, HISTORY_MAX))     # phones choked on long lists
     with db() as c:
         rows = c.execute("""SELECT h.played_at, t.* FROM history h
             JOIN tracks t ON t.id=h.track_id ORDER BY h.played_at DESC LIMIT ?""", (limit,))
