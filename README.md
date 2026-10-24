@@ -38,9 +38,13 @@ locally, which is never saved to the server.
 
 ⚙ Settings → **Pull from another computer** copies songs that aren't in the library yet from a folder on another machine (default: the Apple Music folder on the Mac, `equa@192.168.1.73:/Users/equa/Music/Music/Media.localized/Music/`) and rescans. Change the source to any `user@ip:/full/path`. It uses `rsync` over `ssh`, so the server's user needs key-based ssh access to that machine (`ssh-copy-id user@ip`); nothing is ever deleted or overwritten.
 
+## Music folders
+
+⚙ Settings → **Music folders** lists the folders the library reads from (by default the one you installed with). Add as many as you like with their full path, mark one as **main** (new songs pulled from another computer are saved there) or remove one. Removing only stops reading it - no files are deleted - but its songs leave the library, along with likes and playlist entries for them. A folder that isn't there (e.g. an unmounted drive) stops the scan with an error instead of silently emptying the library.
+
 ## Backups
 
-The database (library index, likes, playlists, history) is backed up automatically: by default every 48 h into `/mnt/backup/mus` (change the folder in ⚙ Settings → Backups), keeping the newest 1. Override in `.env` (see `.env.example`): `BACKUP_DIR` (empty = off), `BACKUP_EVERY_HOURS` (`0` = manual only), `BACKUP_KEEP`. The ⚙ button in the header lists the backups and lets you download or restore one, restore from an uploaded file, or back up right now. Cover art isn't included — a scan rebuilds it. Make sure the service user can write to the backup folder (`install.sh` creates the default one).
+The database (library index, likes, playlists, history) is backed up automatically: by default every 48 h into `/mnt/backup/mus` (change the folder in ⚙ Settings → Backups) (change the folder in ⚙ Settings → Backups), keeping the newest 1. Override in `.env` (see `.env.example`): `BACKUP_DIR` (empty = off), `BACKUP_EVERY_HOURS` (`0` = manual only), `BACKUP_KEEP`. The ⚙ button in the header lists the backups and lets you download or restore one, restore from an uploaded file, or back up right now. Cover art isn't included — a scan rebuilds it. Make sure the service user can write to the backup folder (`install.sh` creates the default one).
 
 ## Authors
 
