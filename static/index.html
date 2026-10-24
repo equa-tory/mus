@@ -114,7 +114,11 @@
   .pl-index{display:flex;flex-wrap:wrap;gap:10px;padding:8px 8px 0}
   .pl-card{background:var(--bg2);border:1px solid var(--line);border-radius:12px;padding:14px;
     width:calc(50% - 5px);cursor:pointer}
+  .pl-card{position:relative}
   .pl-card:hover{border-color:var(--accent-dim)}
+  .pl-card .nm{padding-right:26px}
+  .pl-card .more{position:absolute;top:6px;right:6px;width:30px;height:30px;color:var(--muted);font-size:18px;line-height:1;border-radius:8px}
+  .pl-card .more:hover{background:var(--bg3);color:var(--text)}
   .pl-card .nm{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .pl-card .sub{color:var(--muted);font-size:12.5px;margin-top:3px}
   .pl-tools{display:flex;gap:8px;padding:12px 8px 4px}
@@ -969,8 +973,9 @@ function render(){
     more.onclick=e=>{ e.stopPropagation(); openMenu(e.currentTarget, id); };
     row.append(art,meta,like,end,more);
     row.oncontextmenu=e=>{ e.preventDefault(); openMenu({x:e.clientX,y:e.clientY}, id); };
-    row.onclick=()=>{
+    row.onclick=e=>{
       if(t.broken){ toast("“"+t.title+"” is an empty file — re-download it"); return; }
+      if(S.view==="history"){ openMenu({x:e.clientX,y:e.clientY},id,()=>playFrom(ids,i)); return; }   // history: pick what to do
       playFrom(ids,i); };
     frag.appendChild(row);
   });
@@ -1029,9 +1034,11 @@ function renderPlaylistIndex(){
     const sub=el("div","sub");
     sub.textContent = p.isSmart ? "Smart · "+smartIds(p.rules||{}).length+" tracks"
                                 : (p.trackIds||[]).length+" tracks";
-    c.append(n,sub);
+    const more=el("button","more"); more.textContent="⋯"; more.title="More"; more.setAttribute("aria-label","Playlist menu");
+    more.onclick=e=>{ e.stopPropagation(); playlistMenu(e.currentTarget,p); };
+    c.append(n,sub,more);
     c.onclick=()=>{ S.openPlaylist=p; S.view="playlist"; render(); listEl.scrollTop=0; };
-    c.oncontextmenu=e=>{ e.preventDefault(); playlistMenu(e,p); };
+    c.oncontextmenu=e=>{ e.preventDefault(); playlistMenu({x:e.clientX,y:e.clientY},p); };
     grid.appendChild(c);
   });
   listEl.appendChild(grid);
@@ -1460,7 +1467,7 @@ function fillQueue(body,withHistory){
   if(withHistory&&S.hist.length){
     body.appendChild(qLabel("History"));
     S.hist.forEach(id=>{ const r=qItem(id," hist","↺"); if(!r) return;
-      r.it.onclick=()=>playNow(id); body.appendChild(r.it); });
+      r.it.onclick=e=>openMenu({x:e.clientX,y:e.clientY},id,()=>playNow(id)); body.appendChild(r.it); });
   }
   for(let i=S.pos;i<S.order.length;i++){
     const id=S.queue[S.order[i]];
@@ -1556,11 +1563,12 @@ function displaySleep(sleep){ S.sleep=sleep||null; syncSleepBtn();
 // ---- per-row context menu ----
 let scrim=null;
 function closeMenu(){ document.querySelectorAll(".menu").forEach(m=>m.remove()); if(scrim){scrim.remove();scrim=null;} }
-function openMenu(anchor, id){
+function openMenu(anchor, id, playFn){
   closeMenu();
   scrim=el("div","scrim"); scrim.onclick=closeMenu; scrim.oncontextmenu=e=>{ e.preventDefault(); closeMenu(); }; document.body.appendChild(scrim);
   const m=el("div","menu"); const t=tr(id);
   const add=(label,fn)=>{ const b=el("button"); b.textContent=label; b.onclick=()=>{fn();closeMenu();}; m.appendChild(b); };
+  if(playFn) add("Play",playFn);
   add("Play next",()=>playNext(id));
   add("Add to queue",()=>addQueue(id));
   if(!S.guest){
@@ -1618,6 +1626,27 @@ function playNext(id){
   S.order=S.order.map(v=>v>=insertReal?v+1:v);
   S.order.splice(S.pos+1,0,insertReal);
   renderQueue(); toast("Playing next");
+  if(S.role==="output") syncState(); else cmdQueue();
+}
+// a whole list at once (playlist menu): same slotting as playNext/addQueue, one toast and one sync
+function playNextMany(ids,label){
+  if(followLocked()) return;
+  if(!ids.length){ toast("Nothing in “"+label+"”"); return; }
+  if(!S.queue.length){ playFrom(ids,0); return; }
+  const at=S.order[S.pos]+1, n=ids.length;
+  S.queue.splice(at,0,...ids);
+  S.order=S.order.map(v=>v>=at?v+n:v);
+  S.order.splice(S.pos+1,0,...ids.map((_,k)=>at+k));
+  renderQueue(); toast("Playing next: "+label+" ("+n+")");
+  if(S.role==="output") syncState(); else cmdQueue();
+}
+function addQueueMany(ids,label){
+  if(followLocked()) return;
+  if(!ids.length){ toast("Nothing in “"+label+"”"); return; }
+  if(!S.queue.length){ playFrom(ids,0); return; }
+  const base=S.queue.length;
+  S.queue.push(...ids); S.order.push(...ids.map((_,k)=>base+k));
+  renderQueue(); toast("Added to queue: "+label+" ("+ids.length+")");
   if(S.role==="output") syncState(); else cmdQueue();
 }
 // play `id` immediately, slotted in right after the current position (used for history rows)
@@ -1699,17 +1728,22 @@ function newPlaylist(smart, addId){
     m.remove(); if(S.view==="playlists"||S.view==="playlist") render(); toast("Playlist created");
   };
 }
-function playlistMenu(e,p){
-  if(denyGuest()) return;
-  closeMenu(); scrim=el("div","scrim"); scrim.onclick=closeMenu; document.body.appendChild(scrim);
+const playlistIds = p => p.isSmart ? smartIds(p.rules||{}) : (p.trackIds||[]).filter(id=>S.byId.has(id));
+function playlistMenu(anchor,p){            // anchor: the ⋯ button, or {x,y} for a right-click
+  closeMenu(); scrim=el("div","scrim"); scrim.onclick=closeMenu; scrim.oncontextmenu=e=>{ e.preventDefault(); closeMenu(); }; document.body.appendChild(scrim);
   const m=el("div","menu");
   const add=(l,fn)=>{ const b=el("button"); b.textContent=l; b.onclick=()=>{fn();closeMenu();}; m.appendChild(b); };
+  const ids=playlistIds(p);
   add("Play",()=>{ S.openPlaylist=p; S.view="playlist"; const ids=viewIds(); if(ids.length) playFrom(ids,0); render(); });
-  add("Rename",()=>renamePlaylist(p));
-  add("Delete",async()=>{ await fetch("api/playlists/"+p.id,{method:"DELETE"}); await loadPlaylists();
-    if(S.openPlaylist&&S.openPlaylist.id===p.id) S.openPlaylist=null; render(); });
-  document.body.appendChild(m);
-  m.style.top=e.clientY+"px"; m.style.left=Math.min(e.clientX,innerWidth-210)+"px";
+  add("Play next",()=>playNextMany(ids,p.name));
+  add("Add to queue",()=>addQueueMany(ids,p.name));
+  if(!S.guest){
+    m.appendChild(el("div","sep"));
+    add("Rename",()=>renamePlaylist(p));
+    add("Delete",async()=>{ await fetch("api/playlists/"+p.id,{method:"DELETE"}); await loadPlaylists();
+      if(S.openPlaylist&&S.openPlaylist.id===p.id) S.openPlaylist=null; render(); });
+  }
+  placeMenu(m,anchor);
 }
 function renamePlaylist(p){
   const card=el("div","card"); card.innerHTML="<h3>Rename playlist</h3>";
