@@ -18,6 +18,7 @@ import shutil
 import asyncio
 import sqlite3
 import threading
+import subprocess
 from pathlib import Path
 from datetime import datetime
 
@@ -64,6 +65,7 @@ if LISTEN_ONLY and not PASSWORD:
 MUSIC_DIR = Path(os.environ.get("MUSIC_DIR", "./music")).expanduser().resolve()
 DATA_DIR = Path(os.environ.get("DATA_DIR", "./data")).expanduser().resolve()
 ART_DIR = DATA_DIR / "art"
+PLCOVER_DIR = DATA_DIR / "plcover"          # playlist covers: <playlist id>.jpg (512x512), not part of the DB or its backups
 DB_PATH = DATA_DIR / "library.db"
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -91,6 +93,7 @@ MIME = {
 
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 ART_DIR.mkdir(parents=True, exist_ok=True)
+PLCOVER_DIR.mkdir(parents=True, exist_ok=True)
 
 # --- Auth (single shared password, no usernames) ---------------------------
 # Logging in sets an HttpOnly cookie holding an HMAC derived from the password, so
@@ -882,6 +885,8 @@ def list_playlists():
         for p in pls:
             d = {"id": p["id"], "name": p["name"], "isSmart": bool(p["is_smart"]),
                  "rules": json.loads(p["rules"]) if p["rules"] else None}
+            cp = PLCOVER_DIR / f"{p['id']}.jpg"
+            d["cover"] = int(cp.stat().st_mtime) if cp.is_file() else None      # cache-buster for /cover, or null
             if not p["is_smart"]:
                 tids = [row["track_id"] for row in c.execute(
                     "SELECT track_id FROM playlist_tracks WHERE playlist_id=? ORDER BY position",
@@ -913,6 +918,99 @@ def update_playlist(pid: int, body: dict = Body(...)):
 def delete_playlist(pid: int):
     with db() as c:
         c.execute("DELETE FROM playlists WHERE id=?", (pid,))
+    (PLCOVER_DIR / f"{pid}.jpg").unlink(missing_ok=True)
+    return {"ok": True}
+
+# --- Playlist covers: upload / collage of four of its songs' covers / remove ---
+COVER_PX = 512
+MAX_COVER_UPLOAD = 12 * 1024 * 1024
+
+def _playlist_exists(pid: int):
+    with db() as c:
+        if not c.execute("SELECT 1 FROM playlists WHERE id=?", (pid,)).fetchone():
+            raise HTTPException(404, "No such playlist")
+
+def _ffmpeg(args: list[str]):
+    if not shutil.which("ffmpeg"):
+        raise HTTPException(500, "ffmpeg isn't installed on the server")
+    r = subprocess.run(["ffmpeg", "-y", "-v", "error", "-nostdin", *args], capture_output=True, timeout=60)
+    if r.returncode != 0:
+        raise HTTPException(400, "Couldn't process that image: " + (r.stderr.decode("utf-8", "replace").strip().splitlines() or ["ffmpeg failed"])[-1][:200])
+
+def _save_cover(pid: int, args_before_out: list[str]):
+    out = PLCOVER_DIR / f"{pid}.jpg"
+    tmp = PLCOVER_DIR / f"{pid}.tmp.jpg"
+    try:
+        _ffmpeg([*args_before_out, "-frames:v", "1", "-q:v", "3", str(tmp)])
+        os.replace(tmp, out)
+    finally:
+        tmp.unlink(missing_ok=True)
+    return int(out.stat().st_mtime)
+
+@app.get("/api/playlists/{pid}/cover")
+def playlist_cover(pid: int):
+    p = PLCOVER_DIR / f"{pid}.jpg"
+    if not p.is_file():
+        raise HTTPException(404, "No cover")
+    return FileResponse(p, media_type="image/jpeg")
+
+@app.post("/api/playlists/{pid}/cover", dependencies=OWNER)
+async def playlist_cover_upload(pid: int, request: Request):
+    _playlist_exists(pid)
+    tmp = DATA_DIR / f"cover-upload-{pid}.tmp"
+    n = 0
+    try:
+        with open(tmp, "wb") as f:
+            async for chunk in request.stream():
+                n += len(chunk)
+                if n > MAX_COVER_UPLOAD:
+                    raise HTTPException(413, "Image too large (12 MB max)")
+                f.write(chunk)
+        sq = f"scale={COVER_PX}:{COVER_PX}:force_original_aspect_ratio=increase,crop={COVER_PX}:{COVER_PX}"
+        v = await asyncio.to_thread(_save_cover, pid, ["-i", str(tmp), "-vf", sq])
+    finally:
+        tmp.unlink(missing_ok=True)
+    return {"ok": True, "cover": v}
+
+@app.post("/api/playlists/{pid}/cover/generate", dependencies=OWNER)
+def playlist_cover_generate(pid: int, body: dict = Body(...)):
+    """2x2 collage of four songs' album covers. The client sends the playlist's track ids (smart
+    playlists are only evaluated client-side), already shuffled: the first four that have art win;
+    fewer than four distinct covers are cycled so every corner is filled."""
+    _playlist_exists(pid)
+    ids = body.get("ids")
+    if not isinstance(ids, list) or not all(isinstance(i, int) for i in ids):
+        raise HTTPException(400, "ids must be a list of track ids")
+    arts, seen = [], set()
+    with db() as c:
+        for tid in ids[:400]:
+            r = c.execute("SELECT has_art,art_ext,album FROM tracks WHERE id=?", (tid,)).fetchone()
+            if not r or not r["has_art"]:
+                continue
+            f = ART_DIR / f"{tid}{r['art_ext']}"
+            key = (r["album"] or "", f.stat().st_size) if f.is_file() else None
+            if key is None or key in seen:                   # prefer four different albums over four copies of one
+                continue
+            seen.add(key); arts.append(f)
+            if len(arts) == 4:
+                break
+    if not arts:
+        raise HTTPException(400, "None of this playlist's songs have cover art")
+    h = COVER_PX // 2
+    corners = [arts[i % len(arts)] for i in range(4)]
+    args = ["-f", "lavfi", "-i", f"color=c=black:s={COVER_PX}x{COVER_PX}"]
+    for f in corners:
+        args += ["-i", str(f)]
+    fit = f"scale={h}:{h}:force_original_aspect_ratio=increase,crop={h}:{h},setsar=1,format=yuv420p"
+    # overlay onto a canvas (not hstack/vstack): tolerant of covers with different sizes and pixel formats
+    filt = ";".join(f"[{i + 1}:v]{fit}[c{i}]" for i in range(4)) + (
+        f";[0:v][c0]overlay=0:0[s1];[s1][c1]overlay={h}:0[s2];[s2][c2]overlay=0:{h}[s3];[s3][c3]overlay={h}:{h},format=yuv420p[out]")
+    v = _save_cover(pid, [*args, "-filter_complex", filt, "-map", "[out]"])
+    return {"ok": True, "cover": v, "songs": len(arts)}
+
+@app.delete("/api/playlists/{pid}/cover", dependencies=OWNER)
+def playlist_cover_remove(pid: int):
+    (PLCOVER_DIR / f"{pid}.jpg").unlink(missing_ok=True)
     return {"ok": True}
 
 @app.post("/api/playlists/{pid}/tracks", dependencies=OWNER)

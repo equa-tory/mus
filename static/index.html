@@ -119,6 +119,17 @@
   .pl-card .nm{padding-right:26px}
   .pl-card .more{position:absolute;top:6px;right:6px;width:30px;height:30px;color:var(--muted);font-size:18px;line-height:1;border-radius:8px}
   .pl-card .more:hover{background:var(--bg3);color:var(--text)}
+  .pl-card{display:flex;align-items:center;gap:12px}
+  .pl-card .pt{min-width:0;flex:1}
+  .plart{width:54px;height:54px;border-radius:10px;background:var(--bg3);position:relative;overflow:hidden;flex:none;
+    display:grid;place-items:center;color:var(--muted2);font-size:22px;font-weight:600}
+  .plart img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+  .pl-head{display:flex;align-items:center;gap:14px;padding:6px 10px 10px}
+  .pl-head .plart{width:72px;height:72px;font-size:28px;border-radius:12px}
+  .pl-head .pn{flex:1;min-width:0;font-size:17px;font-weight:600;overflow:hidden;text-overflow:ellipsis}
+  .pl-head .pn small{display:block;color:var(--muted);font-size:12.5px;font-weight:400;margin-top:3px}
+  .pl-head .more{width:34px;height:34px;color:var(--muted);font-size:20px;border-radius:8px;flex:none}
+  .pl-head .more:hover{background:var(--bg3);color:var(--text)}
   .pl-card .nm{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .pl-card .sub{color:var(--muted);font-size:12.5px;margin-top:3px}
   .pl-tools{display:flex;gap:8px;padding:12px 8px 4px}
@@ -205,6 +216,10 @@
     background:var(--text);margin-top:-5px;box-shadow:0 1px 4px rgba(0,0,0,.5)}
   input[type=range]::-moz-range-thumb{width:14px;height:14px;border:0;border-radius:50%;background:var(--text)}
 
+  /* the queue slides up over the whole player (history on top, like the desktop side panel) */
+  #queuePanel{top:0;max-height:none;border-radius:0;border-top:0}
+  #queuePanel .phead{padding-top:calc(env(safe-area-inset-top,0px) + 16px)}
+  #queuePanel .pbody{flex:1;min-height:0}
   /* slide-up panels inside sheet (queue / sleep) */
   .panel{position:absolute;left:0;right:0;bottom:0;z-index:2;background:var(--bg2);border-top:1px solid var(--line);
     border-radius:18px 18px 0 0;transform:translateY(101%);transition:transform .3s var(--ease);
@@ -451,6 +466,11 @@
 
   /* ---- queue labels / history rows (side-panel queue) ---- */
   .qlabel{padding:12px 12px 4px;font-size:11px;letter-spacing:.5px;text-transform:uppercase;color:var(--muted2)}
+  .qgroup{border:1px solid var(--accent-dim);border-radius:12px;margin:6px 2px;padding:0 2px 3px;background:rgba(255,255,255,.02)}
+  .qgh{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:7px 8px 3px 12px;font-size:11.5px;color:var(--muted)}
+  .qgh span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .qgh .qx{flex:none;width:26px;height:26px;color:var(--muted)}
+  .qgh .qx:hover{color:var(--text)}
   .qitem.hist{opacity:.55}
   .qitem.hist:hover{opacity:1}
 
@@ -643,7 +663,7 @@ const fmt = s => { if(!isFinite(s)||s<0) s=0; s=Math.floor(s); return Math.floor
 const S = {
   byId:new Map(), allIds:[], view:"library", openPlaylist:null,
   search:"", listIds:[], historyIds:[],
-  queue:[], order:[], pos:0, shuffle:false, repeat:"off",
+  queue:[], qgroup:[], order:[], pos:0, shuffle:false, repeat:"off",
   volume:0.9, crossfade:4, playing:false,
   sleep:null, _xfading:false, _counted:false, _seeking:false, role:null, _ctrlTime:null, _ctrlTimeAt:null,
   playlists:[], syncPeers:0, hist:[],
@@ -927,9 +947,10 @@ function render(){
     const back=el("div","backrow"); back.innerHTML="‹ Playlists";
     back.onclick=()=>{ S.openPlaylist=null; S.view="playlists"; render(); };
     listEl.appendChild(back);
-    const head=el("div","section-title"); head.style.fontSize="15px"; head.style.textTransform="none";
-    head.style.color="var(--text)"; head.textContent=S.openPlaylist.name +
-      (S.openPlaylist.isSmart?"  · smart":""); listEl.appendChild(head);
+    const pl=S.openPlaylist, head=el("div","pl-head"), pn=el("div","pn"), mb=el("button","more");
+    pn.textContent=pl.name; const sm=el("small"); sm.textContent=(pl.isSmart?"Smart playlist · ":"")+playlistIds(pl).length+" tracks"; pn.appendChild(sm);
+    mb.textContent="⋯"; mb.title="More"; mb.setAttribute("aria-label","Playlist menu"); mb.onclick=e=>playlistMenu(e.currentTarget,pl);
+    head.append(plArt(pl),pn,mb); listEl.appendChild(head);
   }
 
   if(!S.allIds.length){
@@ -1036,7 +1057,8 @@ function renderPlaylistIndex(){
                                 : (p.trackIds||[]).length+" tracks";
     const more=el("button","more"); more.textContent="⋯"; more.title="More"; more.setAttribute("aria-label","Playlist menu");
     more.onclick=e=>{ e.stopPropagation(); playlistMenu(e.currentTarget,p); };
-    c.append(n,sub,more);
+    const pt=el("div","pt"); pt.append(n,sub);
+    c.append(plArt(p),pt,more);
     c.onclick=()=>{ S.openPlaylist=p; S.view="playlist"; render(); listEl.scrollTop=0; };
     c.oncontextmenu=e=>{ e.preventDefault(); playlistMenu({x:e.clientX,y:e.clientY},p); };
     grid.appendChild(c);
@@ -1052,6 +1074,25 @@ function buildOrder(start){
     const k=idx.indexOf(start); if(k>0){ idx.splice(k,1); idx.unshift(start); } S.order=idx; S.pos=0; }
   else { S.order=idx; S.pos=start; }
 }
+// S.qgroup runs parallel to S.queue: null, or {g,n} when the song was queued as part of a playlist
+// (shown in the queue as one bordered box with an X that drops what is left of it).
+let _gseq=0;
+const newGroup=name=>({g:Date.now().toString(36)+"."+(++_gseq), n:name});
+function qg(){ if(!Array.isArray(S.qgroup)||S.qgroup.length!==S.queue.length) S.qgroup=S.queue.map(()=>null); return S.qgroup; }
+const qgFrom=(arr,len)=>Array.isArray(arr)&&arr.length===len?arr:new Array(len).fill(null);
+function qSplice(at,ids,grp){ qg(); S.queue.splice(at,0,...ids); S.qgroup.splice(at,0,...ids.map(()=>grp||null)); }
+function removeGroup(g){
+  if(followLocked()) return;
+  qg();
+  const drop=new Set();                                   // only what hasn't played yet; the current song keeps going
+  S.order.forEach((r,slot)=>{ if(slot>S.pos&&S.qgroup[r]&&S.qgroup[r].g===g) drop.add(r); });
+  if(!drop.size) return;
+  const remap=[]; let k=0; S.queue.forEach((_,r)=>{ remap[r]=drop.has(r)?-1:k++; });
+  S.queue=S.queue.filter((_,r)=>!drop.has(r)); S.qgroup=S.qgroup.filter((_,r)=>!drop.has(r));
+  S.order=S.order.filter(r=>!drop.has(r)).map(r=>remap[r]);
+  renderQueue(); toast("Removed "+drop.size+" from queue");
+  if(S.role==="output") syncState(); else cmdQueue();
+}
 function peekNext(){           // id of next track or null, advancing pos only if real
   if(!S.queue.length) return null;
   if(S.repeat==="one") return currentId();
@@ -1064,7 +1105,7 @@ function peekNext(){           // id of next track or null, advancing pos only i
 function showPlayer(){ $("#player").classList.remove("hidden"); document.body.classList.add("has-player"); }
 function playFrom(ids,i){
   if(followLocked()) return;
-  S.queue=ids.slice(); buildOrder(i);
+  S.queue=ids.slice(); S.qgroup=S.queue.map(()=>null); buildOrder(i);
   showPlayer(); transitionTo(currentId(), FADE);
   if(S.role!=="output") cmdPlayTrack();
 }
@@ -1434,7 +1475,10 @@ xfadeEl.addEventListener("input",()=>{
 // ---- queue panel ----
 function openPanel(p){ closePanels(); p.classList.add("open"); }
 function closePanels(){ $("#queuePanel").classList.remove("open"); $("#sleepPanel").classList.remove("open"); }
-$("#openQueue").onclick=()=>{ renderQueue(); openPanel($("#queuePanel")); };
+$("#openQueue").onclick=()=>{
+  openPanel($("#queuePanel")); renderQueue(true); scrollQueueToCur();
+  loadSideHistory().then(()=>{ if($("#queuePanel").classList.contains("open")){ renderQueue(true); scrollQueueToCur(); } });
+};
 $("#closeQueue").onclick=closePanels;
 $("#openSleep").onclick=()=>{ renderSleep(); openPanel($("#sleepPanel")); };
 $("#closeSleep").onclick=closePanels;
@@ -1461,31 +1505,60 @@ function qItem(id,cls,xText){
   return {it,x};
 }
 const qLabel=txt=>{ const d=el("div","qlabel"); d.textContent=txt; return d; };
-// withHistory (side panel only): recently played tracks above, then now-playing, then up-next
+// withHistory (side panel + full-screen queue): recently played tracks above, then now-playing, then up-next
 function fillQueue(body,withHistory){
   body.innerHTML="";
+  const ctx=(it,id,playFn)=>{ it.oncontextmenu=e=>{ e.preventDefault(); openMenu({x:e.clientX,y:e.clientY},id,playFn); }; };
   if(withHistory&&S.hist.length){
     body.appendChild(qLabel("History"));
     S.hist.forEach(id=>{ const r=qItem(id," hist","↺"); if(!r) return;
-      r.it.onclick=e=>openMenu({x:e.clientX,y:e.clientY},id,()=>playNow(id)); body.appendChild(r.it); });
+      const menu=e=>openMenu({x:e.clientX,y:e.clientY},id,()=>playNow(id));
+      r.it.onclick=menu; ctx(r.it,id,()=>playNow(id)); body.appendChild(r.it); });
   }
+  qg();
+  let box=null, boxG=null;                         // the open playlist box, if the previous row was in one
+  const label=txt=>{ box=null; boxG=null; body.appendChild(qLabel(txt)); };
   for(let i=S.pos;i<S.order.length;i++){
-    const id=S.queue[S.order[i]];
+    const real=S.order[i], id=S.queue[real];
     const r=qItem(id, i===S.pos?" cur":"", i===S.pos?"♪":"✕"); if(!r) continue;
     const {it,x}=r;
-    if(withHistory&&i===S.pos) body.appendChild(qLabel("Now playing"));
-    if(withHistory&&i===S.pos+1) body.appendChild(qLabel("Up next"));
-    if(i!==S.pos) x.onclick=()=>{ const realIdx=S.order[i]; S.order.splice(i,1);
-      S.queue.splice(realIdx,1); S.order=S.order.map(v=>v>realIdx?v-1:v); renderQueue();
+    if(withHistory&&i===S.pos) label("Now playing");
+    if(withHistory&&i===S.pos+1) label("Up next");
+    if(i!==S.pos) x.onclick=()=>{ const realIdx=S.order[i]; S.order.splice(i,1); qg();
+      S.queue.splice(realIdx,1); S.qgroup.splice(realIdx,1); S.order=S.order.map(v=>v>realIdx?v-1:v); renderQueue();
       if(S.role==="output") syncState(); else cmdQueue(); };
-    it.onclick=e=>{ if(e.target===x) return; S.pos=i; transitionTo(currentId(),FADE);
-      if(S.role!=="output") cmdPlayTrack(); };
-    body.appendChild(it);
+    const jump=()=>{ S.pos=i; transitionTo(currentId(),FADE); if(S.role!=="output") cmdPlayTrack(); };
+    it.onclick=e=>{ if(e.target===x) return; jump(); };
+    ctx(it,id,jump);
+    const grp=S.qgroup[real];
+    if(grp){
+      if(!box||boxG!==grp.g){
+        boxG=grp.g; box=el("div","qgroup");
+        let left=0; S.order.forEach((r2,slot)=>{ if(slot>S.pos&&S.qgroup[r2]&&S.qgroup[r2].g===grp.g) left++; });
+        const head=el("div","qgh"), nm=el("span"), gx=el("button","qx");
+        nm.textContent="▤ "+grp.n+" · "+left+(left===1?" song":" songs"); gx.textContent="✕"; gx.title="Remove the rest of this playlist from the queue";
+        gx.onclick=()=>removeGroup(grp.g);
+        head.append(nm,gx); box.appendChild(head); body.appendChild(box);
+      }
+      box.appendChild(it);
+    } else { box=null; boxG=null; body.appendChild(it); }
   }
   if(!body.children.length){
     body.innerHTML='<div class="empty" style="min-height:120px"><p>Queue is empty.</p></div>'; }
 }
-function renderQueue(forceCur){ fillQueue($("#queueBody")); fillQueue($("#queuePopBody")); fillSideQueue(!!forceCur); }
+function renderQueue(forceCur){ fillQueueKeep($("#queueBody"),$("#queuePanel").classList.contains("open")&&!forceCur); fillQueue($("#queuePopBody")); fillSideQueue(!!forceCur); }
+// the full-screen queue shows the same history + now playing + up next as the side panel; re-rendering keeps what you're looking at
+function fillQueueKeep(body,keep){
+  const top=body.scrollTop, c0=body.querySelector(".qitem.cur"), rel=c0?c0.offsetTop-top:null;
+  fillQueue(body,true);
+  const c1=body.querySelector(".qitem.cur");
+  if(keep&&rel!=null&&c1) body.scrollTop=c1.offsetTop-rel;
+}
+function scrollQueueToCur(){
+  const body=$("#queueBody"), c=body.querySelector(".qitem.cur"); if(!c) return;
+  const lab=c.previousElementSibling;                       // keep the "Now playing" label in view
+  body.scrollTop=(c.offsetTop-(lab&&lab.classList.contains("qlabel")?lab.offsetHeight:0))-body.offsetTop;
+}
 // Side-panel queue: re-renders keep the current track where it was on screen (history
 // loading in above it must not shift what you're looking at); forceCur scrolls it to the top.
 function fillSideQueue(forceCur){
@@ -1509,9 +1582,11 @@ async function loadSideHistory(){
 }
 let _shT=null;
 function refreshSideHistory(){
-  if(!sideActive()||!sheetOpen()) return;
+  const panel=$("#queuePanel").classList.contains("open");
+  if(!(sideActive()&&sheetOpen())&&!panel) return;
   clearTimeout(_shT);
-  _shT=setTimeout(async()=>{ await loadSideHistory(); fillSideQueue(false); },400);
+  _shT=setTimeout(async()=>{ await loadSideHistory(); fillSideQueue(false);
+    if($("#queuePanel").classList.contains("open")) fillQueueKeep($("#queueBody"),true); },400);
 }
 
 // ---- sleep timer ----
@@ -1618,11 +1693,11 @@ function playlistPicker(anchor,id){
 function ensureQueue(){ if(!S.queue.length && currentId()==null){} }
 function playNext(id){
   if(followLocked()) return;
-  if(!S.queue.length){ S.queue=[id]; buildOrder(0); showPlayer(); transitionTo(id,FADE);
+  if(!S.queue.length){ S.queue=[id]; S.qgroup=[null]; buildOrder(0); showPlayer(); transitionTo(id,FADE);
     if(S.role!=="output") cmdPlayTrack();
     return; }
   const insertReal=S.order[S.pos]+1;
-  S.queue.splice(insertReal,0,id);
+  qSplice(insertReal,[id],null);
   S.order=S.order.map(v=>v>=insertReal?v+1:v);
   S.order.splice(S.pos+1,0,insertReal);
   renderQueue(); toast("Playing next");
@@ -1634,7 +1709,7 @@ function playNextMany(ids,label){
   if(!ids.length){ toast("Nothing in “"+label+"”"); return; }
   if(!S.queue.length){ playFrom(ids,0); return; }
   const at=S.order[S.pos]+1, n=ids.length;
-  S.queue.splice(at,0,...ids);
+  qSplice(at,ids,newGroup(label));
   S.order=S.order.map(v=>v>=at?v+n:v);
   S.order.splice(S.pos+1,0,...ids.map((_,k)=>at+k));
   renderQueue(); toast("Playing next: "+label+" ("+n+")");
@@ -1645,7 +1720,7 @@ function addQueueMany(ids,label){
   if(!ids.length){ toast("Nothing in “"+label+"”"); return; }
   if(!S.queue.length){ playFrom(ids,0); return; }
   const base=S.queue.length;
-  S.queue.push(...ids); S.order.push(...ids.map((_,k)=>base+k));
+  qSplice(base,ids,newGroup(label)); S.order.push(...ids.map((_,k)=>base+k));
   renderQueue(); toast("Added to queue: "+label+" ("+ids.length+")");
   if(S.role==="output") syncState(); else cmdQueue();
 }
@@ -1654,7 +1729,7 @@ function playNow(id){
   if(followLocked()) return;
   if(!S.queue.length){ playFrom([id],0); return; }
   const insertReal=S.order[S.pos]+1;
-  S.queue.splice(insertReal,0,id);
+  qSplice(insertReal,[id],null);
   S.order=S.order.map(v=>v>=insertReal?v+1:v);
   S.order.splice(S.pos+1,0,insertReal);
   S.pos++;
@@ -1663,10 +1738,10 @@ function playNow(id){
 }
 function addQueue(id){
   if(followLocked()) return;
-  if(!S.queue.length){ S.queue=[id]; buildOrder(0); showPlayer(); transitionTo(id,FADE);
+  if(!S.queue.length){ S.queue=[id]; S.qgroup=[null]; buildOrder(0); showPlayer(); transitionTo(id,FADE);
     if(S.role!=="output") cmdPlayTrack();
     return; }
-  S.queue.push(id); S.order.push(S.queue.length-1); renderQueue(); toast("Added to queue");
+  qSplice(S.queue.length,[id],null); S.order.push(S.queue.length-1); renderQueue(); toast("Added to queue");
   if(S.role==="output") syncState(); else cmdQueue();
 }
 async function addToPlaylist(pid,tid){
@@ -1728,6 +1803,39 @@ function newPlaylist(smart, addId){
     m.remove(); if(S.view==="playlists"||S.view==="playlist") render(); toast("Playlist created");
   };
 }
+// playlist cover: the uploaded / generated image, or the first letter of its name
+function plArt(p){
+  const d=el("div","plart"); d.textContent=(p.name||"?").trim().charAt(0).toUpperCase()||"?";
+  if(p.cover){ const im=el("img"); im.loading="lazy"; im.alt=""; im.src="api/playlists/"+p.id+"/cover?v="+p.cover; im.onerror=()=>im.remove(); d.appendChild(im); }
+  return d;
+}
+async function afterCoverChange(id){
+  await loadPlaylists();
+  if(S.openPlaylist&&S.openPlaylist.id===id) S.openPlaylist=S.playlists.find(x=>x.id===id)||S.openPlaylist;
+  if(S.view==="playlists"||S.view==="playlist") render();
+}
+async function coverFail(r){ toast((await r.json().catch(()=>({}))).detail||"Cover update failed"); }
+function pickCover(p){
+  const f=el("input"); f.type="file"; f.accept="image/*";
+  f.onchange=async()=>{ const file=f.files[0]; if(!file) return;
+    toast("Uploading cover…");
+    const r=await fetch("api/playlists/"+p.id+"/cover",{method:"POST",headers:{"Content-Type":file.type||"application/octet-stream"},body:file}).catch(()=>null);
+    if(!r||!r.ok) return r?coverFail(r):toast("Couldn’t reach the server");
+    await afterCoverChange(p.id); toast("Cover updated"); };
+  f.click();
+}
+async function generateCover(p){
+  const ids=playlistIds(p).slice();
+  for(let i=ids.length-1;i>0;i--){ const j=Math.random()*(i+1)|0; [ids[i],ids[j]]=[ids[j],ids[i]]; }   // random songs each time
+  const r=await fetch("api/playlists/"+p.id+"/cover/generate",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({ids:ids.slice(0,200)})}).catch(()=>null);
+  if(!r||!r.ok) return r?coverFail(r):toast("Couldn’t reach the server");
+  await afterCoverChange(p.id); toast("Cover generated");
+}
+async function removeCover(p){
+  const r=await fetch("api/playlists/"+p.id+"/cover",{method:"DELETE"}).catch(()=>null);
+  if(!r||!r.ok) return r?coverFail(r):toast("Couldn’t reach the server");
+  await afterCoverChange(p.id); toast("Cover removed");
+}
 const playlistIds = p => p.isSmart ? smartIds(p.rules||{}) : (p.trackIds||[]).filter(id=>S.byId.has(id));
 function playlistMenu(anchor,p){            // anchor: the ⋯ button, or {x,y} for a right-click
   closeMenu(); scrim=el("div","scrim"); scrim.onclick=closeMenu; scrim.oncontextmenu=e=>{ e.preventDefault(); closeMenu(); }; document.body.appendChild(scrim);
@@ -1739,6 +1847,9 @@ function playlistMenu(anchor,p){            // anchor: the ⋯ button, or {x,y} 
   add("Add to queue",()=>addQueueMany(ids,p.name));
   if(!S.guest){
     m.appendChild(el("div","sep"));
+    add("Upload cover…",()=>pickCover(p));
+    add("Generate cover from songs",()=>generateCover(p));
+    if(p.cover) add("Remove cover",()=>removeCover(p));
     add("Rename",()=>renamePlaylist(p));
     add("Delete",async()=>{ await fetch("api/playlists/"+p.id,{method:"DELETE"}); await loadPlaylists();
       if(S.openPlaylist&&S.openPlaylist.id===p.id) S.openPlaylist=null; render(); });
@@ -2224,7 +2335,7 @@ addEventListener("keydown",e=>{
 let pT=null;
 function persist(){ clearTimeout(pT); pT=setTimeout(()=>{
   try{ localStorage.setItem("player", JSON.stringify({
-    id:currentId(), time:cur().currentTime, queue:S.queue, pos:S.pos, order:S.order,
+    id:currentId(), time:cur().currentTime, queue:S.queue, qgroup:qg(), pos:S.pos, order:S.order,
     shuffle:S.shuffle, repeat:S.repeat, volume:S.volume, crossfade:S.crossfade })); }catch(e){}
 },400); }
 function restore(){
@@ -2238,7 +2349,7 @@ function restore(){
   syncShuffleUI(); syncRepeatUI();
   aud.forEach(a=>a.volume=S.volume);
   if(d.id!=null && S.byId.has(d.id) && Array.isArray(d.queue) && d.queue.length){
-    S.queue=d.queue; S.order=d.order&&d.order.length===d.queue.length?d.order:[...d.queue.keys()];
+    S.queue=d.queue; S.qgroup=qgFrom(d.qgroup,d.queue.length); S.order=d.order&&d.order.length===d.queue.length?d.order:[...d.queue.keys()];
     S.pos=d.pos||0; showPlayer();
     // Don't touch <audio> yet — we don't know if the server will make us the
     // output. Stash it; the sync handshake decides once the role is known,
@@ -2270,12 +2381,12 @@ function sendCmd(cmd){
   fetch("api/sync/cmd",{method:"POST",headers:{"Content-Type":"application/json"},
     body:JSON.stringify({cid:CLIENT_ID,cmd})}).catch(()=>{});
 }
-function cmdPlayTrack(){ sendCmd({name:"playTrack",value:{queue:S.queue,order:S.order,pos:S.pos,shuffle:S.shuffle}}); }
-function cmdQueue(){ sendCmd({name:"queue",value:{queue:S.queue,order:S.order,pos:S.pos}}); }
+function cmdPlayTrack(){ sendCmd({name:"playTrack",value:{queue:S.queue,qgroup:qg(),order:S.order,pos:S.pos,shuffle:S.shuffle}}); }
+function cmdQueue(){ sendCmd({name:"queue",value:{queue:S.queue,qgroup:qg(),order:S.order,pos:S.pos}}); }
 
 function currentStatePayload(){
   const id=currentId();
-  return { id, queue:S.queue, order:S.order, pos:S.pos, playing:S.playing,
+  return { id, queue:S.queue, qgroup:qg(), order:S.order, pos:S.pos, playing:S.playing,
     time: id!=null?cur().currentTime:0,
     shuffle:S.shuffle, repeat:S.repeat, volume:S.volume, crossfade:S.crossfade, sleep:S.sleep };
 }
@@ -2352,7 +2463,7 @@ function applyState(st){
   _applyingSync=true;
   try{
     const prevId=currentId();
-    if(Array.isArray(st.queue)) S.queue=st.queue;
+    if(Array.isArray(st.queue)){ S.queue=st.queue; S.qgroup=qgFrom(st.qgroup,st.queue.length); }
     if(Array.isArray(st.order)) S.order=st.order;
     if(typeof st.pos==="number") S.pos=st.pos;
     if(st.id!=null && S.queue.length){
@@ -2419,14 +2530,14 @@ function applyCmd(cmd){
     case "sleep": setSleep(cmd.value); break;
     case "playTrack":
       if(cmd.value&&Array.isArray(cmd.value.queue)){
-        S.queue=cmd.value.queue; S.order=cmd.value.order||[...S.queue.keys()]; S.pos=cmd.value.pos||0;
+        S.queue=cmd.value.queue; S.qgroup=qgFrom(cmd.value.qgroup,S.queue.length); S.order=cmd.value.order||[...S.queue.keys()]; S.pos=cmd.value.pos||0;
         if(typeof cmd.value.shuffle==="boolean"&&cmd.value.shuffle!==S.shuffle){ S.shuffle=cmd.value.shuffle; syncShuffleUI(); }
         showPlayer(); transitionTo(currentId(),FADE); syncState();
       }
       break;
     case "queue":
       if(cmd.value&&Array.isArray(cmd.value.queue)){
-        S.queue=cmd.value.queue; S.order=cmd.value.order||[...S.queue.keys()]; S.pos=cmd.value.pos||0;
+        S.queue=cmd.value.queue; S.qgroup=qgFrom(cmd.value.qgroup,S.queue.length); S.order=cmd.value.order||[...S.queue.keys()]; S.pos=cmd.value.pos||0;
         renderQueue(); syncState();
       }
       break;
@@ -2566,7 +2677,7 @@ function followApply(st){
   _applyingSync=true;
   try{
     const id=st.id;
-    if(Array.isArray(st.queue)) S.queue=st.queue;
+    if(Array.isArray(st.queue)){ S.queue=st.queue; S.qgroup=qgFrom(st.qgroup,st.queue.length); }
     if(Array.isArray(st.order)) S.order=st.order;
     if(typeof st.pos==="number") S.pos=st.pos;
     const realIdx=S.queue.indexOf(id);
