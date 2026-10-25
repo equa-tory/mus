@@ -832,16 +832,27 @@ def backups_restore(name: str):
 # authorSep: text that splits a track's artist into several authors ("a / b" with "/").
 # following: lower-cased author keys pinned to the top of the Authors tab.
 DEFAULT_AUTHOR_SEP = "/"
+# tabOrder: order of the top tabs (same on every device); always returns every tab exactly once.
+TAB_IDS = ["library", "authors", "recent", "liked", "most", "history", "playlists"]
 _SETTINGS_LOCK = threading.Lock()
+
+def _norm_tabs(raw) -> list[str]:
+    seen = [t for t in (raw if isinstance(raw, list) else []) if t in TAB_IDS]
+    seen = list(dict.fromkeys(seen))
+    return seen + [t for t in TAB_IDS if t not in seen]
 
 def _read_settings(c) -> dict:
     m = {r["key"]: r["value"] for r in c.execute(
-        "SELECT key,value FROM meta WHERE key IN ('author_sep','following')")}
+        "SELECT key,value FROM meta WHERE key IN ('author_sep','following','tab_order')")}
+    try:
+        tabs = _norm_tabs(json.loads(m.get("tab_order") or "[]"))
+    except ValueError:
+        tabs = list(TAB_IDS)
     try:
         following = [k for k in json.loads(m.get("following") or "[]") if isinstance(k, str)]
     except ValueError:
         following = []
-    return {"authorSep": m.get("author_sep", DEFAULT_AUTHOR_SEP), "following": following}
+    return {"authorSep": m.get("author_sep", DEFAULT_AUTHOR_SEP), "following": following, "tabOrder": tabs}
 
 @app.get("/api/settings")
 def get_settings():
@@ -850,11 +861,23 @@ def get_settings():
 
 @app.put("/api/settings", dependencies=OWNER)
 def put_settings(body: dict = Body(...)):
-    sep = body.get("authorSep")
-    if not isinstance(sep, str) or len(sep.strip()) > 20:
+    """Partial update: send authorSep and/or tabOrder."""
+    sep, tabs = body.get("authorSep"), body.get("tabOrder")
+    if sep is None and tabs is None:
+        raise HTTPException(400, "Nothing to change")
+    if sep is not None and (not isinstance(sep, str) or len(sep.strip()) > 20):
         raise HTTPException(400, "authorSep must be text of up to 20 characters")
+    if tabs is not None and (not isinstance(tabs, list) or not all(isinstance(t, str) for t in tabs)):
+        raise HTTPException(400, "tabOrder must be a list of tab names")
     with _SETTINGS_LOCK, db() as c:
-        c.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('author_sep',?)", (sep.strip(),))
+        if sep is not None:
+            c.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('author_sep',?)", (sep.strip(),))
+        if tabs is not None:
+            order = _norm_tabs(tabs)
+            if order == TAB_IDS:
+                c.execute("DELETE FROM meta WHERE key='tab_order'")        # default = nothing stored
+            else:
+                c.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('tab_order',?)", (json.dumps(order),))
         return _read_settings(c)
 
 @app.post("/api/authors/follow", dependencies=OWNER)

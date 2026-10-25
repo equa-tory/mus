@@ -667,11 +667,18 @@ const S = {
   volume:0.9, crossfade:4, playing:false,
   sleep:null, _xfading:false, _counted:false, _seeking:false, role:null, _ctrlTime:null, _ctrlTimeAt:null,
   playlists:[], syncPeers:0, hist:[],
-  settings:{authorSep:"/",following:[]}, openAuthor:null, _authors:null,
+  settings:{authorSep:"/",following:[],tabOrder:[]}, openAuthor:null, _authors:null,
   auth:{required:false,authed:true}, guest:false, follow:false, live:null, liveOnline:false, _followId:null,
 };
 const TABS = [["library","Library"],["authors","Authors"],["recent","Recently added"],["liked","Liked"],
               ["most","Most played"],["history","History"],["playlists","Playlists"]];
+// top tabs in the saved order (S.settings.tabOrder, shared by every device); unknown/missing ones fixed up
+function orderedTabs(){
+  const by=new Map(TABS), out=[];
+  (S.settings.tabOrder||[]).forEach(k=>{ if(by.has(k)&&!out.some(o=>o[0]===k)) out.push([k,by.get(k)]); });
+  TABS.forEach(t=>{ if(!out.some(o=>o[0]===t[0])) out.push(t); });
+  return out;
+}
 const FADE = 0.6;
 const SILENT = "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=";
 
@@ -917,9 +924,10 @@ const listEl=$("#list");
 function render(){
   $("#searchBtn").classList.toggle("on",!!S.search);
   // tabs
-  const nav=$("#tabs");
-  if(!nav.children.length){
-    TABS.forEach(([v,label])=>{ const b=el("button"); b.textContent=label; b.dataset.view=v;
+  const nav=$("#tabs"), tabs=orderedTabs(), tkey=tabs.map(t=>t[0]).join();
+  if(nav.dataset.order!==tkey){              // first render, or the order was changed (here or on another device)
+    nav.innerHTML=""; nav.dataset.order=tkey;
+    tabs.forEach(([v,label])=>{ const b=el("button"); b.textContent=label; b.dataset.view=v;
       b.onclick=()=>{ S.view=v; S.openPlaylist=null; S.openAuthor=null; S.search=""; $("#search").value="";
         if(v==="history") loadHistory().then(render); else render();
         listEl.scrollTop=0; };
@@ -1867,6 +1875,36 @@ function renamePlaylist(p){
     body:JSON.stringify({name:inp.value})}); await loadPlaylists(); m.remove(); render(); };
 }
 
+// ---- tab order (⚙ Settings; saved on the server, so every device shows the same order) ----
+function tabsSection(fail){
+  const box=el("div");
+  box.insertAdjacentHTML("beforeend","<h3>Tabs</h3>");
+  const info=el("div","bk-info"); info.textContent="Order of the tabs at the top. Saved on the server: all your devices follow it.";
+  const list=el("div"); box.append(info,list);
+  const names=new Map(TABS);
+  async function save(order){
+    const r=await fetch("api/settings",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({tabOrder:order})}).catch(()=>null);
+    if(!r||!r.ok) return r?fail(r):toast("Couldn’t reach the server");
+    S.settings=await r.json(); paint(); render();
+  }
+  function paint(){
+    list.innerHTML="";
+    const order=orderedTabs().map(t=>t[0]);
+    order.forEach((k,i)=>{
+      const r=el("div","bk-row"), nm=el("div","nm"), up=el("button","btn"), dn=el("button","btn");
+      nm.textContent=names.get(k); up.textContent="▲"; dn.textContent="▼"; up.title="Move left"; dn.title="Move right";
+      up.disabled=i===0; dn.disabled=i===order.length-1;
+      const move=d=>{ const o=order.slice(); [o[i],o[i+d]]=[o[i+d],o[i]]; save(o); };
+      up.onclick=()=>move(-1); dn.onclick=()=>move(1);
+      r.append(nm,up,dn); list.appendChild(r);
+    });
+    const def=TABS.map(t=>t[0]);
+    if(order.join()!==def.join()){ const rs=el("button","btn"); rs.textContent="Reset order"; rs.style.margin="4px 0 10px"; rs.onclick=()=>save(def); list.appendChild(rs); }
+  }
+  paint();
+  return box;
+}
+
 // ---- music folders: any number, one is the main one (⚙ Settings; /api/folders, logic in roots.py) ----
 function foldersSection(fail){
   const box=el("div");
@@ -1975,7 +2013,8 @@ function backupsModal(){
     catch(e){ m.remove(); return toast("Couldn't load backups"); }
     card.innerHTML="";
     if(phoneUI()) card.appendChild(accountButtons(m));
-    card.insertAdjacentHTML("beforeend","<h3>Authors</h3>");
+    card.appendChild(tabsSection(fail));
+    card.insertAdjacentHTML("beforeend",'<h3 class="sec">Authors</h3>');
     const ainfo=el("div","bk-info");
     ainfo.textContent="Text that separates several authors in one artist, e.g. “/” turns “name1 / name2” into two authors. A few characters are fine; empty keeps each artist as one author.";
     const arow=el("div","bk-acts"), ain=el("input"), asave=el("button","btn");
@@ -2384,7 +2423,20 @@ addEventListener("keydown",e=>{
 
 // ---- persistence (per device) ----
 let pT=null;
-function persist(){ clearTimeout(pT); pT=setTimeout(()=>{
+// where in the current song we are: a small separate key, written every few seconds while playing and when the
+// page goes away, so a refresh resumes at the right second (the big "player" blob only changes on discrete events)
+function posNow(){
+  const a=cur();
+  if(S.role==="output"&&a.src) return a.readyState>=1?(a.currentTime||0):null;      // still loading: don't record a 0
+  return S._ctrlTime!=null?S._ctrlTime:null;
+}
+function persistPos(){
+  try{ const id=currentId(), t=posNow(); if(id!=null&&t!=null) localStorage.setItem("playerPos",JSON.stringify({id,time:t})); }catch(e){}
+}
+setInterval(()=>{ if(S.playing) persistPos(); },4000);
+addEventListener("pagehide",persistPos);
+document.addEventListener("visibilitychange",()=>{ if(document.visibilityState==="hidden") persistPos(); });
+function persist(){ clearTimeout(pT); pT=setTimeout(()=>{ persistPos();
   try{ localStorage.setItem("player", JSON.stringify({
     id:currentId(), time:cur().currentTime, queue:S.queue, qgroup:qg(), pos:S.pos, order:S.order,
     shuffle:S.shuffle, repeat:S.repeat, volume:S.volume, crossfade:S.crossfade })); }catch(e){}
@@ -2405,7 +2457,8 @@ function restore(){
     // Don't touch <audio> yet — we don't know if the server will make us the
     // output. Stash it; the sync handshake decides once the role is known,
     // preferring the server's live state over this possibly-stale local copy.
-    S._resume={id:d.id, time:d.time||0};
+    let pos=null; try{ pos=JSON.parse(localStorage.getItem("playerPos")||"null"); }catch(e){}
+    S._resume={id:d.id, time:(pos&&pos.id===d.id&&pos.time>=0)?pos.time:(d.time||0)};
     S.playing=false; onTrackChanged(d.id); updatePlay();
   }
   _applyingSync=false;
@@ -2635,7 +2688,8 @@ function setRoleFromServer(output,peers){
     // S.role is already "output" by this point (set above); S._ctrlTime is
     // this device's own mirrored clock from when it was still a controller.
     const resume = (shownId!=null && S.byId.has(shownId))
-      ? {id:shownId, time:S._ctrlTime!=null?S._ctrlTime:cur().currentTime, playing:false}
+      ? {id:shownId, time:S._ctrlTime!=null?S._ctrlTime
+          :(S._resume&&S._resume.id===shownId?S._resume.time:cur().currentTime), playing:false}      // _resume = position saved before the refresh
       : (_lastState && _lastState.id!=null && S.byId.has(_lastState.id))
       ? {id:_lastState.id, time:_lastState.time||0, playing:!!_lastState.playing}
       : (S._resume && S.byId.has(S._resume.id) ? {id:S._resume.id, time:S._resume.time, playing:false} : null);
