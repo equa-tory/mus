@@ -166,6 +166,10 @@ def migrate_db():
         if "missing" not in cols:
             # missing=1: the file is gone but the row stays because likes / playlists / history hang on it
             c.execute("ALTER TABLE tracks ADD COLUMN missing INTEGER DEFAULT 0")
+        # "Recently added" follows the files' dates, not the day they were first scanned (one-off backfill)
+        if not c.execute("SELECT 1 FROM meta WHERE key='added_from_files'").fetchone():
+            c.execute("UPDATE tracks SET added_at=MIN(COALESCE(added_at,mtime),mtime) WHERE mtime>?", (_MIN_SANE_TS,))
+            c.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('added_from_files','1')")
 
 # --- Metadata reading (mutagen) -------------------------------------------
 def read_metadata(path: str):
@@ -239,6 +243,26 @@ _SYNC_CLIENTS: dict[str, _queue.Queue] = {}   # cid -> per-client event queue
 _SYNC_LISTENERS: dict[str, _queue.Queue] = {}  # read-only guests: get state/role, never counted or output
 _SYNC_OUTPUT: str | None = None               # cid that currently owns audio
 _SYNC_STATE: dict = {}                        # last full state published by the output
+
+_MIN_SANE_TS = 631152000        # 1990-01-01: older "dates" are junk (0, 1970, unset tags)
+
+def _birth(path: str) -> float:
+    """File creation time (ext4/xfs/btrfs/APFS via `stat`), 0 when the filesystem doesn't know it."""
+    try:
+        out = subprocess.run(["stat", "-c", "%W", "--", path], capture_output=True, text=True, timeout=5).stdout.strip()
+        return float(out) if out.lstrip("-").isdigit() else 0.0
+    except Exception:
+        return 0.0
+
+def _added_guess(path: str, st) -> float:
+    """When a song really came into existence: the earliest of now, the file's modified and created
+    times. Copies that keep times (rsync -t, mv) report the original date; a plain copy reports
+    the copy time, which can only be later, so it never wins over an older date we already hold."""
+    cands = [time.time()]
+    for t in (st.st_mtime, _birth(path)):
+        if t and t > _MIN_SANE_TS:
+            cands.append(t)
+    return min(cands)
 
 def _fp(size, duration, title, artist, album):
     """What identifies a song when its path changes: same bytes + same tags (moves keep both)."""
@@ -329,13 +353,15 @@ def _scan_worker():
                 row = claim(st.st_size, st.st_mtime, duration, title, artist, album)
                 if row is not None:
                     moved += 1
+            guess = _added_guess(sp, st)
 
             if row:  # update existing (or a moved song: same row, new path)
                 cur.execute("""UPDATE tracks SET path=?,title=?,artist=?,album=?,album_artist=?,
-                    track_no=?,duration=?,ext=?,size=?,mtime=?,has_art=?,art_ext=?,last_scan=?,missing=0
+                    track_no=?,duration=?,ext=?,size=?,mtime=?,has_art=?,art_ext=?,last_scan=?,missing=0,
+                    added_at=MIN(COALESCE(added_at,?),?)
                     WHERE id=?""",
                     (sp, title, artist, album, album_artist, track_no, duration, ext,
-                     st.st_size, st.st_mtime, has_art, art_ext, scan_id, row["id"]))
+                     st.st_size, st.st_mtime, has_art, art_ext, scan_id, guess, guess, row["id"]))
                 tid = row["id"]
                 # clear stale art if format changed / removed
                 if row["has_art"] and row["art_ext"]:
@@ -349,7 +375,7 @@ def _scan_worker():
                      has_art,art_ext,added_at,last_scan)
                     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (sp, title, artist, album, album_artist, track_no, duration, ext,
-                     st.st_size, st.st_mtime, has_art, art_ext, time.time(), scan_id))
+                     st.st_size, st.st_mtime, has_art, art_ext, guess, scan_id))
                 tid = cur.lastrowid
                 added += 1
 
@@ -360,7 +386,7 @@ def _scan_worker():
 
         # Rows not seen this scan: delete the ones nothing hangs on, keep the rest as missing.
         gone = list(cur.execute("""SELECT id,art_ext,size,mtime,duration,title,artist,album,liked,play_count,
-                last_played_at, missing,
+                last_played_at, added_at, missing,
                 EXISTS(SELECT 1 FROM playlist_tracks WHERE track_id=tracks.id) AS in_pl,
                 EXISTS(SELECT 1 FROM history WHERE track_id=tracks.id) AS in_hist
             FROM tracks WHERE last_scan!=?""", (scan_id,)))
@@ -381,8 +407,10 @@ def _scan_worker():
                             or alive_stat.get((g["size"], g["mtime"]), [])), None)
             if sid is not None:    # a copy of this song is in the library: hand everything over to it
                 cur.execute("""UPDATE tracks SET liked=MAX(liked,?), play_count=play_count+?,
-                    last_played_at=COALESCE(MAX(last_played_at,?), last_played_at, ?) WHERE id=?""",
-                    (g["liked"] or 0, g["play_count"] or 0, g["last_played_at"], g["last_played_at"], sid))
+                    last_played_at=COALESCE(MAX(last_played_at,?), last_played_at, ?),
+                    added_at=MIN(COALESCE(added_at,?),COALESCE(?,added_at,0)) WHERE id=?""",
+                    (g["liked"] or 0, g["play_count"] or 0, g["last_played_at"], g["last_played_at"],
+                     g["added_at"], g["added_at"], sid))
                 cur.execute("UPDATE OR IGNORE playlist_tracks SET track_id=? WHERE track_id=?", (sid, g["id"]))
                 cur.execute("UPDATE history SET track_id=? WHERE track_id=?", (sid, g["id"]))
                 if g["art_ext"]:

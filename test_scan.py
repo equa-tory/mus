@@ -86,6 +86,8 @@ class MovingSongs(unittest.TestCase):
 
     def test_3_copy_first_then_delete_original(self):
         orig = q("SELECT path FROM tracks WHERE id=?", self.ids["Song 1"])[0][0]
+        with app.db() as c:
+            c.execute("UPDATE tracks SET added_at=1600000000 WHERE id=?", (self.ids["Song 1"],))
         os.makedirs(f"{self.m}/D")
         shutil.copy(orig, f"{self.m}/D/copy.m4a")                                 # new mtime, same bytes + tags
         scan()
@@ -98,6 +100,7 @@ class MovingSongs(unittest.TestCase):
         self.assertEqual(q("SELECT liked FROM tracks WHERE id=?", new_id)[0][0], 1)
         self.assertIn((new_id,), q("SELECT track_id FROM playlist_tracks WHERE playlist_id=1"))
         self.assertEqual(len(q("SELECT track_id FROM playlist_tracks WHERE playlist_id=1")), 3)
+        self.assertEqual(q("SELECT added_at FROM tracks WHERE id=?", new_id)[0][0], 1600000000)   # the copy inherits the original's date
 
     def test_4_unused_deleted_song_is_removed(self):
         os.makedirs(f"{self.m}/E", exist_ok=True)
@@ -125,6 +128,41 @@ class MovingSongs(unittest.TestCase):
         self.assertIn("not found", app.SCAN["error"])
         self.assertEqual(len(q("SELECT id FROM tracks")), count)
         app.roots.set_config([])
+
+
+@unittest.skipUnless(HAVE_FFMPEG, "needs ffmpeg")
+class AddedDate(unittest.TestCase):
+    """'Recently added' follows the files' own dates (modified / created), not the scan time."""
+
+    @classmethod
+    def tearDownClass(cls):                       # leave the shared library as MovingSongs expects it
+        shutil.rmtree(f"{os.environ['MUSIC_DIR']}/Old", ignore_errors=True)
+        scan()
+
+    def test_new_file_with_old_mtime_is_old(self):
+        m = os.environ["MUSIC_DIR"]
+        make_song(f"{m}/Old/old.m4a", 20)
+        os.utime(f"{m}/Old/old.m4a", (1500000000, 1500000000))        # 2017, e.g. rsync -t from another machine
+        make_song(f"{m}/Old/fresh.m4a", 21)
+        scan()
+        self.assertEqual(q("SELECT added_at FROM tracks WHERE title='Song 20'")[0][0], 1500000000)
+        import time
+        self.assertGreater(q("SELECT added_at FROM tracks WHERE title='Song 21'")[0][0], time.time() - 120)
+
+    def test_migration_backfills_from_mtime_once(self):
+        with app.db() as c:
+            c.execute("INSERT INTO tracks(path,title,artist,album,size,mtime,added_at) VALUES('/x/y.m4a','Z','Z','Z',1,1400000000,1790000000)")
+            c.execute("INSERT INTO tracks(path,title,artist,album,size,mtime,added_at,missing) VALUES('/x/junk.m4a','J','J','J',1,5,1790000000,1)")
+            c.execute("DELETE FROM meta WHERE key='added_from_files'")
+        app.migrate_db()
+        self.assertEqual(q("SELECT added_at FROM tracks WHERE path='/x/y.m4a'")[0][0], 1400000000)
+        self.assertEqual(q("SELECT added_at FROM tracks WHERE path='/x/junk.m4a'")[0][0], 1790000000)     # junk mtime ignored
+        with app.db() as c:
+            c.execute("UPDATE tracks SET added_at=1790000000 WHERE path='/x/y.m4a'")
+        app.migrate_db()                                                                                  # runs only once
+        self.assertEqual(q("SELECT added_at FROM tracks WHERE path='/x/y.m4a'")[0][0], 1790000000)
+        with app.db() as c:
+            c.execute("DELETE FROM tracks WHERE path LIKE '/x/%'")
 
 
 def tearDownModule():

@@ -893,7 +893,7 @@ function viewIds(){
   let ids;
   switch(S.view){
     case "author": { const a=authors().get(S.openAuthor); ids=a?a.ids.slice():[]; break; }
-    case "recent": ids=[...S.allIds].sort((a,b)=>(tr(b).addedAt||0)-(tr(a).addedAt||0)); break;
+    case "recent": ids=[...S.allIds].sort((a,b)=>(tr(b).addedAt||0)-(tr(a).addedAt||0)||b-a); break;
     case "liked":  ids=S.allIds.filter(id=>tr(id).liked); break;
     case "most":   ids=S.allIds.filter(id=>tr(id).playCount>0)
                       .sort((a,b)=>tr(b).playCount-tr(a).playCount); break;
@@ -2379,7 +2379,7 @@ addEventListener("keydown",e=>{
   else if(e.code==="Escape"){
     if($("#queuePop").classList.contains("open")) closeQueuePop();
     else if($("#sleepPop").classList.contains("open")) closeSleepPop();
-    else collapse(); }
+    else if(!sideActive()) collapse(); }          // the docked side panel is part of the page: Esc doesn't hide it
 });
 
 // ---- persistence (per device) ----

@@ -186,7 +186,6 @@ data/ytdl/
 .deno/
 
 # runtime snapshots / covers / staging
-data/pre-scan.db
-data/pre-restore.db
+data/pre-*.db
 data/plcover/
 data/pull/

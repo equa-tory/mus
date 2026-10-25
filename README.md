@@ -40,7 +40,7 @@ locally, which is never saved to the server.
 
 ## Moving songs around
 
-Move or rename song files freely (between folders, or inside one), then press **Scan** (or let a folder change / pull do it). The scan recognises a moved song by its size and tags, keeps its library entry, and so keeps likes, playlist membership and order, play counts and history. A song whose file isn't in any music folder at that moment stays in its playlists as *missing* (shown as "N missing" on the playlist) and comes back when the file reappears. Songs you never liked, queued in a playlist or played are simply forgotten when their file goes. A snapshot of the database from before every such scan is kept in `data/pre-scan.db`.
+Move or rename song files freely (between folders, or inside one), then press **Scan** (or let a folder change / pull do it). The scan recognises a moved song by its size and tags, keeps its library entry, and so keeps likes, playlist membership and order, play counts and history. A song whose file isn't in any music folder at that moment stays in its playlists as *missing* (shown as "N missing" on the playlist) and comes back when the file reappears. Songs you never liked, queued in a playlist or played are simply forgotten when their file goes. A snapshot of the database from before every such scan is kept in `data/pre-scan.db`. **Recently added** uses the file's own modified / created date (the earliest of them, and never later than a date the library already knows), so songs copied with new timestamps don't jump to the top.
 
 ## Music folders
 
