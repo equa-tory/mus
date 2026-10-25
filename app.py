@@ -841,18 +841,27 @@ def _norm_tabs(raw) -> list[str]:
     seen = list(dict.fromkeys(seen))
     return seen + [t for t in TAB_IDS if t not in seen]
 
+def _norm_hidden(raw) -> list[str]:
+    return [t for t in TAB_IDS if t in (raw if isinstance(raw, list) else [])]
+
 def _read_settings(c) -> dict:
     m = {r["key"]: r["value"] for r in c.execute(
-        "SELECT key,value FROM meta WHERE key IN ('author_sep','following','tab_order')")}
+        "SELECT key,value FROM meta WHERE key IN ('author_sep','following','tab_order','tab_hidden')")}
     try:
         tabs = _norm_tabs(json.loads(m.get("tab_order") or "[]"))
     except ValueError:
         tabs = list(TAB_IDS)
     try:
+        hidden = _norm_hidden(json.loads(m.get("tab_hidden") or "[]"))
+    except ValueError:
+        hidden = []
+    if len(hidden) >= len(TAB_IDS):
+        hidden = []                      # never leave the app without a tab
+    try:
         following = [k for k in json.loads(m.get("following") or "[]") if isinstance(k, str)]
     except ValueError:
         following = []
-    return {"authorSep": m.get("author_sep", DEFAULT_AUTHOR_SEP), "following": following, "tabOrder": tabs}
+    return {"authorSep": m.get("author_sep", DEFAULT_AUTHOR_SEP), "following": following, "tabOrder": tabs, "hiddenTabs": hidden}
 
 @app.get("/api/settings")
 def get_settings():
@@ -861,10 +870,14 @@ def get_settings():
 
 @app.put("/api/settings", dependencies=OWNER)
 def put_settings(body: dict = Body(...)):
-    """Partial update: send authorSep and/or tabOrder."""
-    sep, tabs = body.get("authorSep"), body.get("tabOrder")
-    if sep is None and tabs is None:
+    """Partial update: send any of authorSep, tabOrder, hiddenTabs."""
+    sep, tabs, hid = body.get("authorSep"), body.get("tabOrder"), body.get("hiddenTabs")
+    if sep is None and tabs is None and hid is None:
         raise HTTPException(400, "Nothing to change")
+    if hid is not None and (not isinstance(hid, list) or not all(isinstance(t, str) for t in hid)):
+        raise HTTPException(400, "hiddenTabs must be a list of tab names")
+    if hid is not None and len(_norm_hidden(hid)) >= len(TAB_IDS):
+        raise HTTPException(400, "Keep at least one tab visible")
     if sep is not None and (not isinstance(sep, str) or len(sep.strip()) > 20):
         raise HTTPException(400, "authorSep must be text of up to 20 characters")
     if tabs is not None and (not isinstance(tabs, list) or not all(isinstance(t, str) for t in tabs)):
@@ -872,6 +885,12 @@ def put_settings(body: dict = Body(...)):
     with _SETTINGS_LOCK, db() as c:
         if sep is not None:
             c.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('author_sep',?)", (sep.strip(),))
+        if hid is not None:
+            hs = _norm_hidden(hid)
+            if hs:
+                c.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('tab_hidden',?)", (json.dumps(hs),))
+            else:
+                c.execute("DELETE FROM meta WHERE key='tab_hidden'")
         if tabs is not None:
             order = _norm_tabs(tabs)
             if order == TAB_IDS:
