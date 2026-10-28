@@ -2416,8 +2416,27 @@ if("mediaSession" in navigator){
 }
 
 // ---- keyboard (PC / some TV remotes) ----
+// W = "surprise me" for the page you're on: a track list plays a random song from it (as if you had tapped it),
+// the Playlists tab opens a random playlist, the Authors tab a random author.
+function randomHere(){
+  if(document.querySelector(".modal,.menu")) return;
+  const pick=a=>a[Math.random()*a.length|0];
+  if(S.view==="playlists"&&!S.openPlaylist){
+    if(!S.playlists.length){ toast("No playlists yet"); return; }
+    const p=pick(S.playlists); S.openPlaylist=p; S.view="playlist"; render(); listEl.scrollTop=0; toast("Opened “"+p.name+"”"); return;
+  }
+  if(S.view==="authors"){
+    const q=stripSep(S.search), list=[...authors().values()].filter(a=>!q||stripSep(a.name).includes(q));
+    if(!list.length){ toast("No authors here"); return; }
+    openAuthor(pick(list).key); return;
+  }
+  const all=S.listIds||[], ok=all.filter(id=>{ const t=tr(id); return t&&!t.broken&&!t.failed; });
+  if(!ok.length){ toast("Nothing to play here"); return; }
+  playFrom(all,all.indexOf(pick(ok)));
+}
 addEventListener("keydown",e=>{
-  if(e.target.tagName==="INPUT") return;
+  if(e.target.tagName==="INPUT"||e.target.tagName==="TEXTAREA"||e.target.tagName==="SELECT"||e.target.isContentEditable) return;
+  if(e.code==="KeyW"&&!e.ctrlKey&&!e.metaKey&&!e.altKey&&!e.shiftKey&&!e.repeat){ e.preventDefault(); randomHere(); return; }
   if(e.code==="Space"){ e.preventDefault(); togglePlay(); }
   else if(e.code==="ArrowRight" && e.shiftKey) nextTrack();
   else if(e.code==="ArrowLeft" && e.shiftKey) prevTrack();
