@@ -633,7 +633,18 @@ def runtime_problem(rt=None):
 
 
 def _env():
-    return {**os.environ, "PYTHONIOENCODING": "utf-8"}
+    env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
+    # systemd does not inherit the interactive shell's proxy settings.
+    proxy = env.get("MUS_DOWNLOAD_PROXY", "").strip()
+    if not proxy:
+        try:
+            proxy = (ytdl_dir() / "proxy.txt").read_text(encoding="utf-8").strip()
+        except FileNotFoundError:
+            pass
+    if proxy:
+        for key in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"):
+            env[key] = proxy
+    return env
 
 
 def hint_for(text):
@@ -644,7 +655,13 @@ def hint_for(text):
         return "YouTube wants a sign-in. Paste fresh cookies."
     if "private" in t or "members-only" in t or "join this channel" in t:
         return "Private or members-only. Cookies from an account that can see it are needed."
-    if ("challenge" in t or "page needs to be reloaded" in t or "requested format is not available" in t):
+    if "http error 503" in t or "service unavailable" in t:
+        return "YouTube's media server returned HTTP 503. Retry, or check the server's download proxy/network route."
+    if "read timed out" in t or "connection timed out" in t:
+        return "YouTube's media server timed out. Retry, or check the server's download proxy/network route."
+    if (any("challenge" in line and any(w in line for w in ("failed", "failure", "unable", "error"))
+            for line in t.splitlines()) or "page needs to be reloaded" in t
+            or "requested format is not available" in t):
         return runtime_problem() or "yt-dlp couldn't solve YouTube's challenge. Try Update yt-dlp, then retry."
     return ""
 

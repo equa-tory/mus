@@ -64,3 +64,10 @@ Songs are saved as `.m4a` with the cover embedded and **artist / album / title**
 
 YouTube needs your login cookies to allow downloads: the dialog accepts JSON exports from phone cookie extensions (such as Cookie-Editor), Netscape cookies.txt, or a Cookie: header. On your phone, export the youtube.com cookies as JSON, paste the whole export into the box, and press **Save cookies**. The dialog includes phone instructions and a **Paste from clipboard** button where supported; use a private tab/window when exporting so YouTube doesn't rotate the saved copy. They're stored on the server only, and mus tells you when they've expired or stopped working. `./install.sh` also installs Deno (needed by yt-dlp to solve YouTube's challenge) into `./.deno`; update yt-dlp itself from the dialog when downloads start failing. Tests: `venv/bin/python -m unittest test_ytdl`.
 
+If downloads work in a terminal but fail with HTTP 503 or timeouts in the service,
+check its network route: systemd does not inherit your shell's proxy variables.
+Set `MUS_DOWNLOAD_PROXY` in `.env` or the service environment, or put the proxy URL
+(for example `http://127.0.0.1:1080`) in `data/ytdl/proxy.txt`. The file is git-ignored
+and read for every playlist fetch, cookie check, and download. Without either
+setting, downloads use the inherited proxy environment.
+

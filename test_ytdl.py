@@ -77,6 +77,32 @@ class Scratch(unittest.TestCase):
         return sid
 
 
+class DownloadNetworkTests(Scratch):
+    def test_proxy_file_works_without_shell_environment(self):
+        (ytdl.ytdl_dir() / "proxy.txt").write_text("http://127.0.0.1:1080\n")
+        with mock.patch.dict(os.environ, {}, clear=True):
+            env = ytdl._env()
+        for key in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"):
+            self.assertEqual(env[key], "http://127.0.0.1:1080")
+        self.assertEqual(env["PYTHONIOENCODING"], "utf-8")
+        with mock.patch.dict(os.environ, {"MUS_DOWNLOAD_PROXY": "http://proxy.test:8080"}, clear=True):
+            self.assertEqual(ytdl._env()["https_proxy"], "http://proxy.test:8080")
+
+    def test_missing_proxy_file_preserves_environment(self):
+        with mock.patch.dict(os.environ, {"https_proxy": "http://proxy.test:8080", "PATH": "/bin"}, clear=True):
+            env = ytdl._env()
+        self.assertEqual(env["https_proxy"], "http://proxy.test:8080")
+        self.assertEqual(env["PATH"], "/bin")
+
+    def test_media_errors_after_successful_challenge_have_network_hints(self):
+        solved = "[youtube] [jsc:deno] Solving JS challenges using deno\n"
+        self.assertIn("HTTP 503", ytdl.hint_for(solved + "ERROR: HTTP Error 503: Service Unavailable"))
+        self.assertIn("timed out", ytdl.hint_for(solved + "ERROR: Read timed out"))
+        self.assertEqual(ytdl.hint_for(solved + "ERROR: Disk full"), "")
+        with mock.patch.object(ytdl, "runtime_problem", return_value="Runtime missing"):
+            self.assertEqual(ytdl.hint_for("WARNING: n challenge solving failed"), "Runtime missing")
+
+
 class HelperTests(unittest.TestCase):
     def test_normalize_url(self):
         self.assertEqual(ytdl.normalize_url("https://www.youtube.com/watch?v=abc&list=PL123"),
