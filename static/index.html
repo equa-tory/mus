@@ -2114,10 +2114,11 @@ function downloadModal(){
       '<div class="dl-note" id="dlDirMsg"></div></details>'+
     '<details class="dl-sec" id="dlCk"><summary>YouTube cookies <span class="dl-badge" id="dlCkBadge"></span></summary>'+
       '<p><b>Needed for downloads.</b> Without them YouTube often answers “Sign in to confirm you’re not a bot”. Paste them once - they stay on the server and are never shown again.</p>'+
-      '<textarea id="dlCkText" spellcheck="false" autocomplete="off" autocapitalize="off" placeholder="Paste the cookies.txt contents, or the Cookie: header value"></textarea>'+
-      '<div class="dl-row"><button class="btn accent" id="dlCkSave">Save cookies</button><button class="btn" id="dlCkTest" hidden>Test cookies</button>'+
+      '<textarea id="dlCkText" spellcheck="false" autocomplete="off" autocapitalize="off" placeholder="Paste a JSON cookie export, cookies.txt contents, or the Cookie: header value"></textarea>'+
+      '<div class="dl-row"><button class="btn" id="dlCkPaste" hidden>Paste from clipboard</button><button class="btn accent" id="dlCkSave">Save cookies</button><button class="btn" id="dlCkTest" hidden>Test cookies</button>'+
         '<button class="btn" id="dlCkClear" hidden>Remove</button><span class="dl-note" id="dlCkMsg"></span></div>'+
-      '<p><b>How to get them:</b> open a <b>private window</b>, log in to youtube.com, then either use a cookies.txt extension (“Get cookies.txt LOCALLY”) and copy the youtube.com cookies, or press F12 → Network → click any request to youtube.com → Request Headers → copy the whole value after <code>cookie:</code>. Close the private window afterwards (a normal session keeps rotating the cookies, which breaks the saved copy). You can do this on a PC and paste here from your phone.</p></details>'+
+      '<p><b>On your phone:</b> use a browser cookie extension such as Cookie-Editor. On iPhone, enable it in Settings → Apps → Safari → Extensions, allow it for youtube.com and in Private browsing. Open youtube.com in a <b>private tab</b>, sign in, open the extension and export as <b>JSON</b>. Paste the whole export here and tap <b>Save cookies</b>. Netscape and header exports work too.</p>'+
+      '<p><b>On a computer:</b> open a <b>private window</b>, log in to youtube.com, then either use a cookies.txt extension (“Get cookies.txt LOCALLY”) and copy the youtube.com cookies, or press F12 → Network → click any request to youtube.com → Request Headers → copy the whole value after <code>cookie:</code>. Close the private tabs/window after exporting (a normal session keeps rotating the cookies, which breaks the saved copy). Saved cookies work for downloads from any device.</p></details>'+
     '<div class="dl-row"><select id="dlSrc"></select><button class="btn accent" id="dlFetch">Fetch list</button><button class="btn" id="dlDel" hidden>Remove</button></div>'+
     '<div class="dl-row"><input type="text" id="dlUrl" placeholder="Add a playlist link (https://youtube.com/playlist?list=…)" autocomplete="off" autocapitalize="off"><button class="btn" id="dlAdd">Add</button></div>'+
     '<div class="dl-note" id="dlMsg"></div>'+
@@ -2182,6 +2183,13 @@ function downloadModal(){
       if(c&&c.checked*1000>=since-2000) say(node,c.ok===true?"Cookies work ✓":c.ok===false?"These cookies don’t work - they look expired or signed out":"Couldn’t test them right now",c.ok===false);
       else if(n<14&&m.isConnected) watchCheck(since,node,n+1); else say(node,"");
     },n?2500:1500);
+  }
+  if(navigator.clipboard&&navigator.clipboard.readText){
+    q("#dlCkPaste").hidden=false;
+    q("#dlCkPaste").onclick=async()=>{
+      try{ q("#dlCkText").value=await navigator.clipboard.readText(); q("#dlCkText").focus(); say(q("#dlCkMsg"),"Pasted - tap Save cookies"); }
+      catch(e){ say(q("#dlCkMsg"),"Clipboard access unavailable. Touch and hold the box and choose Paste.",true); }
+    };
   }
   q("#dlCkSave").onclick=async()=>{
     const node=q("#dlCkMsg"), text=q("#dlCkText").value.trim();

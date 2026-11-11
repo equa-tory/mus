@@ -6,6 +6,7 @@ Nothing here talks to YouTube or touches the real library/data: every test gets 
 folders, and the job runner is exercised against a tiny stand-in for yt-dlp.
 """
 import json
+import http.cookiejar
 import os
 import shutil
 import sqlite3
@@ -157,6 +158,48 @@ class RetagTests(Scratch):
 
 
 class CookieTests(Scratch):
+    def test_phone_json_export_round_trip(self):
+        cookies = [
+            {"domain": ".youtube.com", "name": "SID", "value": "phone=token", "secure": True,
+             "httpOnly": True, "expirationDate": 1900000000.75},
+            {"domain": "m.youtube.com", "path": "/feed", "name": "PREF", "value": "", "session": True},
+            {"domain": ".google.com", "name": "HSID", "value": "google", "expires": "1900000001"},
+            {"domain": ".example.com", "name": "unrelated", "value": "omit"},
+            {"domain": "notyoutube.com", "name": "unrelated", "value": "omit"},
+        ]
+        for export in (cookies, {"cookies": cookies}):
+            with self.subTest(wrapped=isinstance(export, dict)):
+                self.assertEqual(ytdl.save_cookies(json.dumps(export)), (3, True))
+                jar = http.cookiejar.MozillaCookieJar(str(ytdl.cookie_path()))
+                jar.load(ignore_discard=True, ignore_expires=True)
+                by_name = {c.name: c for c in jar}
+                self.assertEqual(set(by_name), {"SID", "PREF", "HSID"})
+                self.assertEqual(by_name["SID"].value, "phone=token")
+                self.assertEqual(by_name["SID"].expires, 1900000000)
+                self.assertTrue(by_name["SID"].secure)
+                self.assertFalse(by_name["PREF"].domain_initial_dot)
+                self.assertEqual(by_name["PREF"].path, "/feed")
+                self.assertEqual(by_name["PREF"].value, "")
+                self.assertFalse(ytdl.cookie_status()["expired"])
+
+    def test_json_defaults_and_invalid_expiry(self):
+        for expiry in (None, "invalid", "Infinity"):
+            with self.subTest(expiry=expiry):
+                body, n, login = ytdl.normalize_cookies(json.dumps([
+                    {"name": "SID", "value": "x", "expirationDate": expiry}, None, {}]))
+                self.assertEqual((n, login), (1, True))
+                self.assertIn(".youtube.com\tTRUE\t/\tFALSE\t" + ytdl._FAR_FUTURE, body)
+
+    def test_invalid_json_does_not_replace_saved_cookies(self):
+        ytdl.save_cookies("SID=original")
+        original = ytdl.cookie_path().read_text()
+        for text in ('[{"value":"x=y"}', '[]', '{}', '{"cookies": "SID=x"}',
+                     '[{"name":"SID","value":"x\\nforged"}]',
+                     '[{"name":"SID\\tbad","value":"x"}]'):
+            with self.subTest(text=text), self.assertRaises(ValueError):
+                ytdl.save_cookies(text)
+            self.assertEqual(ytdl.cookie_path().read_text(), original)
+
     def test_saved_privately_and_status_has_no_secrets(self):
         ytdl.save_cookies("SID=supersecret; HSID=other")
         mode = stat.S_IMODE(os.stat(ytdl.cookie_path()).st_mode)
